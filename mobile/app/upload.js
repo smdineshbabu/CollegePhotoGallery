@@ -1,38 +1,100 @@
-import { View, Text, Button, Alert } from "react-native";
+import React, { useState } from "react";
+import {
+  View,
+  Text,
+  Button,
+  Alert,
+  StyleSheet,
+} from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import { uploadFile } from "../services/uploadService";
-import { useState } from "react";
 import Loader from "../components/Loader";
 
-export default function UploadScreen() {
+export default function Upload() {
+  const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const pickFile = async () => {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: ["image/*", "application/pdf"],
-    });
+    try {
+      const result =
+        await DocumentPicker.getDocumentAsync({
+          type: ["image/*", "application/pdf"],
+        });
 
-    if (result.canceled) return;
+      if (result.canceled) return;
+
+      setFile(result.assets[0]);
+    } catch (error) {
+      Alert.alert("Error", "File selection failed");
+    }
+  };
+
+  const handleUpload = async () => {
+    if (!file) {
+      Alert.alert(
+        "No file",
+        "Please select an image or PDF"
+      );
+      return;
+    }
 
     try {
       setLoading(true);
-      const response = await uploadFile(result.assets[0]);
-      Alert.alert("Success", response.message);
+      await uploadFile(file);
+      Alert.alert("Success", "File uploaded");
+      setFile(null);
     } catch (error) {
-      Alert.alert("Error", "File upload failed. Try again.");
+      Alert.alert(
+        "Upload failed",
+        error.message || "Something went wrong"
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  if (loading) {
-    return <Loader />;
-  }
-
   return (
-    <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-      <Text>Upload Image or PDF</Text>
-      <Button title="Pick File" onPress={pickFile} />
+    <View style={styles.container}>
+      <Text style={styles.title}>Upload File</Text>
+
+      <Button title="Select File" onPress={pickFile} />
+
+      {file && (
+        <Text style={styles.file}>
+          Selected: {file.name}
+        </Text>
+      )}
+
+      <View style={styles.space} />
+
+      <Button
+        title="Upload"
+        onPress={handleUpload}
+      />
+
+      {loading && <Loader />}
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    padding: 20,
+    justifyContent: "center",
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: "bold",
+    textAlign: "center",
+    marginBottom: 20,
+  },
+  file: {
+    marginTop: 15,
+    textAlign: "center",
+    color: "green",
+  },
+  space: {
+    height: 15,
+  },
+});
