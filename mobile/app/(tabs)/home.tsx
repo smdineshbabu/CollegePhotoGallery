@@ -1,27 +1,30 @@
-import { View, Text, StyleSheet } from 'react-native';
-import { Ionicons, MaterialIcons } from '@expo/vector-icons';
+import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import { useRouter } from "expo-router";
 
-export default function Home() {
+export default function HomeScreen() {
+  const router = useRouter();
+
   return (
     <View style={styles.container}>
-      <Ionicons name="school" size={80} color="#007AFF" />
-
       <Text style={styles.title}>College Photo Gallery</Text>
 
-      <View style={styles.row}>
-        <MaterialIcons name="photo-library" size={28} color="#333" />
-        <Text style={styles.text}>View College Memories</Text>
-      </View>
+      <Text style={styles.subtitle}>
+        Welcome to the Dashboard
+      </Text>
 
-      <View style={styles.row}>
-        <Ionicons name="people" size={28} color="#333" />
-        <Text style={styles.text}>Events & Functions</Text>
-      </View>
+      <TouchableOpacity
+        style={styles.button}
+        onPress={() => router.push("/(tabs)/gallery")}
+      >
+        <Text style={styles.buttonText}>View Gallery</Text>
+      </TouchableOpacity>
 
-      <View style={styles.row}>
-        <Ionicons name="calendar" size={28} color="#333" />
-        <Text style={styles.text}>Year-wise Albums</Text>
-      </View>
+      <TouchableOpacity
+        style={styles.buttonSecondary}
+        onPress={() => alert("Upload feature coming next")}
+      >
+        <Text style={styles.buttonText}>Upload Photo</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -29,22 +32,39 @@ export default function Home() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
     padding: 20,
+    backgroundColor: "#fff",
   },
   title: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    marginVertical: 15,
+    fontSize: 26,
+    fontWeight: "bold",
+    marginBottom: 10,
   },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 8,
-  },
-  text: {
+  subtitle: {
     fontSize: 16,
-    marginLeft: 10,
+    color: "#666",
+    marginBottom: 30,
+  },
+  button: {
+    width: "100%",
+    padding: 15,
+    backgroundColor: "#007AFF",
+    borderRadius: 8,
+    alignItems: "center",
+    marginBottom: 15,
+  },
+  buttonSecondary: {
+    width: "100%",
+    padding: 15,
+    backgroundColor: "#34C759",
+    borderRadius: 8,
+    alignItems: "center",
+  },
+  buttonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
   },
 });
