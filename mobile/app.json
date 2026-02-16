@@ -2,6 +2,7 @@
   "expo": {
     "name": "College Photo Gallery",
     "slug": "college-photo-gallery",
+    "scheme": "collegegallery",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -9,7 +10,7 @@
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#007AFF"
     },
     "assetBundlePatterns": [
       "**/*"
@@ -17,6 +18,7 @@
     "android": {
       "package": "com.college.photogallery",
       "versionCode": 1,
+      "usesCleartextTraffic": true,
       "permissions": [
         "INTERNET",
         "READ_EXTERNAL_STORAGE",
@@ -24,10 +26,21 @@
       ]
     },
     "extra": {
-      "apiUrl": "http://10.164.177.112:5000/api",
+      "apiUrl": "http://10.73.154.112:5000/api",
       "eas": {
-        "projectId": "80d8f384-e4c6-4888-ad6b-60ae1e3ee93d"
+        "projectId": "49f3461c-3e90-4754-88f3-37e39d6e4c19"
       }
-    }
+    },
+    "plugins": [
+      "expo-web-browser",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ]
   }
 }

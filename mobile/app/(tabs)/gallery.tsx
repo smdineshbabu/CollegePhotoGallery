@@ -3,123 +3,959 @@ import {
   Text,
   StyleSheet,
   FlatList,
-  Image,
+  Dimensions,
   TouchableOpacity,
+  Modal,
   Alert,
+  ActivityIndicator,
   TextInput,
+  Platform,
+  UIManager,
+  ScrollView,
+  StatusBar,
+  LayoutAnimation,
+  BackHandler,
+  RefreshControl,
+  SafeAreaView,
 } from "react-native";
-import { useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useState, useCallback, useEffect, useRef, memo } from "react";
+import { useFocusEffect, useLocalSearchParams, useRouter, usePathname } from "expo-router";
+import { useIsFocused } from "@react-navigation/native";
+import { LinearGradient } from "expo-linear-gradient";
+import { BlurView } from "expo-blur";
+import { Image } from "expo-image";
+import * as Haptics from "expo-haptics";
+import ShimmerLoader from "../../components/ShimmerLoader";
+import PhotoViewer from "../../components/PhotoViewer";
+
+import * as authService from "../../services/authService";
+import * as authStorage from "../../services/authStorage";
+import Animated, { FadeInDown, FadeInRight, useAnimatedStyle, useSharedValue, withSpring, withTiming, LinearTransition } from "react-native-reanimated";
+import { Ionicons } from "@expo/vector-icons";
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+import * as ImagePicker from "expo-image-picker";
+import api from "../../services/api";
+
+const { width } = Dimensions.get("window");
+const LOGO_PHOTO = "https://img.icons8.com/fluency/96/stack-of-photos.png";
+const COLUMN_COUNT = 2;
+const CARD_WIDTH = (width - 40) / COLUMN_COUNT; // 40 = padding
 
 type Photo = {
-  id: string;
+  _id: string;
   title: string;
-  image: string;
+  imageUrl: string;
+  thumbnailUrl?: string; // High-speed thumbnail
+  folder: string;
+  status: 'pending' | 'approved' | 'rejected';
 };
 
-const INITIAL_PHOTOS: Photo[] = [
-  {
-    id: "1",
-    title: "College Fest",
-    image: "https://images.unsplash.com/photo-1523050854058-8df90110c9f1",
-  },
-  {
-    id: "2",
-    title: "Annual Day",
-    image: "https://images.unsplash.com/photo-1503676260728-1c00da094a0b",
-  },
-  {
-    id: "3",
-    title: "Graduation Day",
-    image: "https://images.unsplash.com/photo-1522202176988-66273c2fd55f",
-  },
-];
-
 export default function GalleryScreen() {
-  const [photos, setPhotos] = useState<Photo[]>(INITIAL_PHOTOS);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [newTitle, setNewTitle] = useState("");
+  const [photos, setPhotos] = useState<Photo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const router = useRouter();
+  const [viewerIndex, setViewerIndex] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [viewerOpen, setViewerOpen] = useState(false);
 
-  const deletePhoto = (id: string) => {
-    Alert.alert("Delete", "Are you sure?", [
-      { text: "Cancel" },
-      {
-        text: "Delete",
-        onPress: () => {
-          setPhotos((prev) => prev.filter((p) => p.id !== id));
-        },
-      },
-    ]);
+  const insets = useSafeAreaInsets();
+  const isFocused = useIsFocused();
+  const pathname = usePathname();
+  const flatListRef = useRef<FlatList>(null);
+
+  const scrollToTop = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+  };
+  const selectedPhotoIdx = useRef<number>(0);
+  const sessionViewedIds = useRef<Set<string>>(new Set());
+  const [user, setUser] = useState<any>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editingTitle, setEditingTitle] = useState("");
+  const [updating, setUpdating] = useState(false);
+
+  const fetchUserData = async () => {
+    const userData = await authService.getCurrentUser();
+    setUser(userData);
+  };
+  const cameFromHome = useRef(false);
+  const isInitialFocus = useRef(true);
+
+  // Folder Navigation State
+  const [viewMode, setViewMode] = useState<"folders" | "photos">("folders");
+  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
+
+  // Upload State
+
+  const [isPhotoActionsVisible, setIsPhotoActionsVisible] = useState(false);
+  const [selectedPhotoForAction, setSelectedPhotoForAction] = useState<Photo | null>(null);
+
+  // Handle incoming parameters (from Home screen)
+  const { folder } = useLocalSearchParams();
+
+  // Dashboard Tracking
+  const [myUploadsIds, setMyUploadsIds] = useState<string[]>([]);
+  const [seenUploadsCount, setSeenUploadsCount] = useState<number>(0);
+
+
+  // Upload Logic States 
+  const [isUploadModalVisible, setIsUploadModalVisible] = useState(false);
+  const [previewImages, setPreviewImages] = useState<string[]>([]);
+  const [newTitles, setNewTitles] = useState<string[]>([]);
+  const [newCategory, setNewCategory] = useState("College Events");
+  const [customCategory, setCustomCategory] = useState("");
+  const [uploading, setUploading] = useState(false);
+
+  const fetchPhotos = async (showLoading = true) => {
+    try {
+      if (showLoading) setLoading(true);
+      await fetchUserData();
+      const response = await api.get("/upload");
+      console.log("[GALLERY] API Response:", response.data.length, "photos");
+
+      const storedUrl = await authStorage.getServerUrl();
+      let baseRaw = (storedUrl || api.defaults.baseURL || "http://10.73.154.112:5000/api");
+      if (!baseRaw.startsWith("http")) baseRaw = "http://" + baseRaw;
+      const baseApiUrl = baseRaw.replace("/api", "").replace(/\/$/, "");
+
+      const standardizedPhotos = response.data.map((p: any) => {
+        let finalImageUrl = p.imageUrl;
+        let finalThumbnailUrl = p.thumbnailUrl;
+
+        // Helper to fix URL
+        const fixUrl = (url: string) => {
+          if (!url) return null;
+          // If it's already a relative path (starts with /uploads), just prepend base
+          if (url.startsWith("/uploads")) {
+            return `${baseApiUrl}${url}`.trim();
+          }
+          // If it's an absolute URL (http...), strip the domain and use current base
+          if (url.startsWith("http")) {
+            const parts = url.split("/uploads/");
+            if (parts.length > 1) {
+              return `${baseApiUrl}/uploads/${parts[1]}`.trim();
+            }
+          }
+          // Fallback
+          return url.trim();
+        };
+
+        return {
+          ...p,
+          imageUrl: fixUrl(p.imageUrl) || p.imageUrl,
+          thumbnailUrl: fixUrl(p.thumbnailUrl) || p.thumbnailUrl || fixUrl(p.imageUrl), // Fallback to main image if thumb missing
+        };
+      });
+      console.log("[GALLERY] Standardized photos:", standardizedPhotos.length);
+      if (standardizedPhotos.length > 0) {
+        console.log("[GALLERY] Sample standardized photo:", standardizedPhotos[0]);
+      }
+      const filteredResult = standardizedPhotos.filter((p: any) => {
+        const folder = (p.folder || "").toLowerCase();
+        const title = (p.title || "").toLowerCase();
+        // Skip anything related to recovered/restored
+        const isExcluded = folder.includes("recovered") ||
+          folder.includes("restored") ||
+          title.includes("recovered") ||
+          title.includes("restored");
+        return p.imageUrl && !isExcluded;
+      });
+      setPhotos(filteredResult);
+    } catch (error: any) {
+      if (showLoading) {
+        console.error("[GALLERY] Error fetching photos:", error);
+        console.error("[GALLERY] Error message:", error.message);
+        Alert.alert(
+          "Connection Error",
+          `Failed to load gallery.\n\n1.Ensure your phone is on the same hotspot / WiFi.\n2.Check the Server URL in Settings(Gear Icon).\n\nDetail: ${error.message} `
+        );
+      }
+    } finally {
+      if (showLoading) setLoading(false);
+      setRefreshing(false);
+    }
   };
 
-  const startEdit = (photo: Photo) => {
-    setEditingId(photo.id);
-    setNewTitle(photo.title);
-  };
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
 
-  const saveEdit = (id: string) => {
-    setPhotos((prev) =>
-      prev.map((p) =>
-        p.id === id ? { ...p, title: newTitle } : p
-      )
-    );
-    setEditingId(null);
-    setNewTitle("");
-  };
+      const loadMyUploads = async () => {
+        try {
+          const stored = await AsyncStorage.getItem("my_uploads");
+          if (stored) {
+            const ids = JSON.parse(stored);
+            setMyUploadsIds(ids);
 
-  const renderItem = ({ item }: { item: Photo }) => (
-    <View style={styles.card}>
-      <Image source={{ uri: item.image }} style={styles.image} />
+            const seen = await AsyncStorage.getItem("seen_uploads_count");
+            if (seen) setSeenUploadsCount(parseInt(seen));
+          }
+        } catch (e) {
+          console.error("Error loading my uploads:", e);
+        }
+      };
 
-      {editingId === item.id ? (
-        <>
-          <TextInput
-            value={newTitle}
-            onChangeText={setNewTitle}
-            style={styles.input}
-          />
-          <TouchableOpacity
-            style={styles.saveBtn}
-            onPress={() => saveEdit(item.id)}
-          >
-            <Text style={styles.btnText}>Save</Text>
-          </TouchableOpacity>
-        </>
-      ) : (
-        <>
-          <Text style={styles.title}>{item.title}</Text>
-
-          <View style={styles.actions}>
-            <TouchableOpacity
-              style={styles.editBtn}
-              onPress={() => startEdit(item)}
-            >
-              <Text style={styles.btnText}>Edit</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.deleteBtn}
-              onPress={() => deletePhoto(item.id)}
-            >
-              <Text style={styles.btnText}>Delete</Text>
-            </TouchableOpacity>
-          </View>
-        </>
-      )}
-    </View>
+      // Simplify initial load logic
+      const loadInitialData = async () => {
+        await loadMyUploads(); // RESTORED: Critical for filtering!
+        await fetchPhotos(isInitialFocus.current);
+        isInitialFocus.current = false;
+      };
+      loadInitialData();
+    }, [])
   );
+
+  // Consolidated Param Handling - SOURCE OF TRUTH
+  useEffect(() => {
+    if (folder) {
+      const decodedFolder = decodeURIComponent(folder as string);
+      console.log("[GALLERY] Setting folder from param:", decodedFolder);
+      setSelectedFolder(decodedFolder);
+      setViewMode("photos");
+      cameFromHome.current = true;
+    } else {
+      // If no param, ensure we are in folder mode (unless we are just navigating back from a photo)
+      // We only reset if we are NOT already in a folder state initiated by the user within the tab
+      // But to fix the "stuck" issue, we entering the tab without params should probably reset
+      if (!cameFromHome.current && !selectedFolder) {
+        setViewMode("folders");
+      }
+    }
+  }, [folder]);
+
+  // Cleanup params on unmount/blur is handled by the router automatically in some cases,
+  // but let's ensure we don't have lingering params when switching tabs significantly.
+  // actually, let's REMOVE the manual param clearing on blur for now to see if it stabilizes navigation.
+
+
+
+
+  const incrementView = async (id: string) => {
+    if (!id || sessionViewedIds.current.has(id)) return;
+    try {
+      sessionViewedIds.current.add(id);
+      await api.patch(`/ upload / ${id}/view`);
+    } catch (error) {
+      // Log only in dev to keep UI clean
+      if (__DEV__) console.log("View update failed:", id);
+    }
+  };
+
+  const handleUpdateTitle = async (id: string) => {
+    if (!editingTitle.trim()) {
+      Alert.alert("Error", "Title cannot be empty");
+      return;
+    }
+    try {
+      setUpdating(true);
+      await api.patch(`/upload/${id}`, { title: editingTitle });
+      setPhotos(prev => prev.map(p => p._id === id ? { ...p, title: editingTitle } : p));
+      setIsEditing(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      console.error("Update error:", error);
+      Alert.alert("Error", "Failed to update title");
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const startEditing = (currentTitle: string) => {
+    setEditingTitle(currentTitle);
+    setIsEditing(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  const handleDeletePhoto = async (id: string) => {
+    Alert.alert(
+      "Delete Photo",
+      "Are you sure you want to delete this memory? This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              setUpdating(true);
+              await api.delete(`/upload/${id}`);
+              setPhotos(prev => prev.filter(p => p._id !== id));
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            } catch (error) {
+              console.error("Delete photo error:", error);
+              Alert.alert("Error", "Failed to delete photo");
+            } finally {
+              setUpdating(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleDeleteFolder = async (folderName: string) => {
+    Alert.alert(
+      "Delete Folder",
+      `Are you sure you want to delete "${folderName}" and ALL photos inside? This cannot be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete All",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              setLoading(true);
+              await api.delete(`/upload/folder/${folderName}`);
+              await fetchPhotos(); // Refresh to update folder list
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            } catch (error) {
+              console.error("Delete folder error:", error);
+              Alert.alert("Error", "Failed to delete folder");
+            } finally {
+              setLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleRenameFolder = async (oldName: string) => {
+    Alert.prompt(
+      "Rename Folder",
+      "Enter new name for this folder",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Rename",
+          onPress: async (newName?: string) => {
+            if (!newName || !newName.trim()) return;
+            const trimmed = newName.trim();
+            if (trimmed === oldName) return;
+            try {
+              setLoading(true);
+              await api.patch("/upload/folder/rename", { oldName, newName: trimmed });
+
+              // Update selected folder state if it was the one renamed
+              if (selectedFolder === oldName) {
+                setSelectedFolder(trimmed);
+              }
+
+              await fetchPhotos();
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            } catch (error) {
+              console.error("Rename folder error:", error);
+              Alert.alert("Error", "Failed to rename folder");
+            } finally {
+              setLoading(false);
+            }
+          }
+        }
+      ],
+      "plain-text",
+      oldName
+    );
+  };
+
+  const handleFolderActions = (folderName: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    Alert.alert(
+      "Folder Actions",
+      `What would you like to do with "${folderName}"?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Rename", onPress: () => handleRenameFolder(folderName) },
+        { text: "Delete", style: "destructive", onPress: () => handleDeleteFolder(folderName) },
+      ]
+    );
+  };
+
+  const handlePhotoActions = (item: Photo) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    Alert.alert(
+      "Photo Actions",
+      "What would you like to do with this memory?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Rename", onPress: () => {
+            startEditing(item.title);
+          }
+        },
+        { text: "Delete", style: "destructive", onPress: () => handleDeletePhoto(item._id) },
+      ]
+    );
+  };
+
+
+  const MemoizedFolderItem = memo(({ item, onPress, onActions }: { item: any; onPress: (name: string) => void, onActions: (name: string) => void }) => (
+    <TouchableOpacity
+      style={styles.folderCard}
+      activeOpacity={0.8}
+      onPress={() => onPress(item.name)}
+      onLongPress={() => onActions(item.name)}
+    >
+      <View style={styles.folderImageContainer}>
+        <Image
+          source={{
+            uri: item.preview,
+            headers: { "bypass-tunnel-reminder": "true" }
+          }}
+          style={styles.folderPreview}
+          transition={200}
+        />
+        <View style={styles.folderIconContainer}>
+          <Ionicons name="folder" size={20} color="#fff" />
+        </View>
+      </View>
+      <View style={styles.folderInfo}>
+        <Text style={styles.folderName} numberOfLines={1}>{item.name}</Text>
+        <Text style={styles.folderCount}>{item.count} Photos</Text>
+      </View>
+    </TouchableOpacity>
+  ));
+
+  const MemoizedPhotoItem = memo(({ item, onPress, onActions, index }: {
+    item: Photo;
+    onPress: (photo: Photo) => void;
+    onActions: (photo: Photo) => void;
+    index: number;
+  }) => (
+    <View style={{ flex: 1 }}>
+      <TouchableOpacity
+        style={styles.card}
+        activeOpacity={0.8}
+        onPress={() => {
+          onPress(item);
+        }}
+        onLongPress={() => onActions(item)}
+      >
+        <Image
+          source={{
+            uri: item.thumbnailUrl || item.imageUrl,
+            headers: { "bypass-tunnel-reminder": "true" }
+          }}
+          style={styles.image}
+          transition={300}
+          recyclingKey={item._id}
+        />
+
+        {/* Status Overlays */}
+        {(item.status === 'pending' || item.status === 'rejected') && (
+          <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFill}>
+            <View style={styles.statusOverlay}>
+              <View style={[
+                styles.statusBadge,
+                item.status === 'rejected' ? styles.statusBadgeRejected : styles.statusBadgePending
+              ]}>
+                <Ionicons
+                  name={item.status === 'rejected' ? "close-circle" : "time"}
+                  size={16}
+                  color="#fff"
+                />
+                <Text style={styles.statusBadgeText}>
+                  {item.status === 'rejected' ? "Rejected" : "Pending"}
+                </Text>
+              </View>
+            </View>
+          </BlurView>
+        )}
+
+        <LinearGradient
+          colors={["transparent", "rgba(0,0,0,0.8)"]}
+          style={styles.cardOverlay}
+        >
+          <View style={styles.cardHeader}>
+            <Text style={styles.cardCategory}>{item.folder || "Event"}</Text>
+          </View>
+          <Text style={styles.cardTitle} numberOfLines={1}>{item.title || "Untitled"}</Text>
+        </LinearGradient>
+      </TouchableOpacity>
+    </View>
+  ));
+
+  const handleBackToFolders = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // Smoother layout transition for folder switching
+    LayoutAnimation.configureNext({
+      duration: 300,
+      create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+      update: { type: LayoutAnimation.Types.spring, springDamping: 0.7 },
+      delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+    });
+
+    // If we came from Home (Explore Category), go back to Home directly
+    if (cameFromHome.current) {
+      setViewMode("folders");
+      setSelectedFolder(null);
+      cameFromHome.current = false;
+      router.replace("/(tabs)/home");
+      return;
+    }
+
+    // Unified back logic
+    if (viewMode === "photos" && selectedFolder) {
+      // If in a folder, go back to folders list
+      setViewMode("folders");
+      setSelectedFolder(null);
+      return;
+    }
+
+    // Otherwise (in folders or in 'All Photos' grid), go home
+    setViewMode("folders");
+    setSelectedFolder(null);
+    router.replace("/(tabs)/home");
+  };
+
+
+
+  const onRefresh = useCallback(() => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setRefreshing(true);
+    fetchPhotos(true).finally(() => setRefreshing(false));
+  }, []);
+
+  // Handle hardware back button with focus safety
+  useFocusEffect(
+    useCallback(() => {
+      const backAction = () => {
+        if (isEditing) {
+          setIsEditing(false);
+          return true;
+        }
+
+
+
+        if (viewMode === "photos") {
+          handleBackToFolders();
+          return true;
+        }
+        return false;
+      };
+
+      const backHandler = BackHandler.addEventListener(
+        "hardwareBackPress",
+        backAction
+      );
+
+      return () => {
+        backHandler.remove();
+        // Aggressively clear params when leaving context
+        router.setParams({ folder: undefined, openMyUploads: undefined });
+      };
+    }, [viewMode, isEditing])
+  );
+
+  const viewabilityConfig = {
+    itemVisiblePercentThreshold: 50
+  };
+
+  const onViewableItemsChanged = useCallback(({ viewableItems }: any) => {
+    if (viewableItems.length > 0) {
+      const currentItem = viewableItems[0].item;
+      incrementView(currentItem._id);
+    }
+  }, []);
+
+  // Group photos into folders
+  const getFolders = () => {
+    const folderMap: { [key: string]: { name: string; count: number; preview: string } } = {};
+    // Only count approved photos for the main folders view
+    const approvedPhotos = photos.filter(p => p.status === 'approved');
+
+    approvedPhotos.forEach((photo) => {
+      const folderName = photo.folder || "General";
+      if (!folderMap[folderName]) {
+        folderMap[folderName] = {
+          name: folderName,
+          count: 0,
+          preview: photo.imageUrl,
+        };
+      }
+      folderMap[folderName].count++;
+    });
+    return Object.values(folderMap).filter(f => f.name !== "Restored");
+  };
+
+  const pickImage = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert("Permission required", "Allow gallery access to upload photos");
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.8,
+      allowsMultipleSelection: true,
+    });
+
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      const uris = result.assets.map(asset => asset.uri);
+      setPreviewImages(uris);
+      setNewTitles(uris.map(() => ""));
+
+      // Smart folder pre-selection
+      const standardCategories = ["College Events", "Placements", "Sports", "Campus Life"];
+      if (selectedFolder && standardCategories.includes(selectedFolder)) {
+        setNewCategory(selectedFolder);
+        setCustomCategory("");
+      } else if (selectedFolder && selectedFolder !== "Restored") {
+        setNewCategory("Other");
+        setCustomCategory(selectedFolder);
+      } else {
+        setNewCategory("College Events");
+        setCustomCategory("");
+      }
+
+      setIsUploadModalVisible(true);
+    }
+  };
+
+  const uploadImage = async () => {
+    if (previewImages.length === 0) return;
+
+    // Check if at least the first title is provided if multiple, or all if preferred
+    if (newTitles.some(t => !t.trim())) {
+      Alert.alert("Error", "Please provide a title for all selected photos");
+      return;
+    }
+
+    const finalCategory = newCategory === "Other" ? customCategory : newCategory;
+
+    if (newCategory === "Other" && !customCategory.trim()) {
+      Alert.alert("Error", "Please specify the category");
+      return;
+    }
+
+    const formData = new FormData();
+
+    if (Platform.OS === "web") {
+      for (let i = 0; i < previewImages.length; i++) {
+        const uri = previewImages[i];
+        const response = await fetch(uri);
+        const blob = await response.blob();
+        formData.append("photos", blob, `upload_${i}_${Date.now()}.jpg`);
+      }
+    } else {
+      previewImages.forEach((uri, index) => {
+        formData.append("photos", {
+          uri: uri,
+          name: `upload_${index}_${Date.now()}.jpg`,
+          type: "image/jpeg",
+        } as any);
+      });
+    }
+
+    formData.append("titles", JSON.stringify(newTitles));
+    formData.append("folder", finalCategory);
+
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      setUploading(true);
+      const response = await api.post("/upload", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      // TRACK UPLOAD IDs
+      try {
+        const newPhotos = response.data;
+        if (Array.isArray(newPhotos)) {
+          const newIds = newPhotos.map(p => p._id);
+          const stored = await AsyncStorage.getItem("my_uploads");
+          let currentIds = stored ? JSON.parse(stored) : [];
+          // Ensure uniqueness and append new ones
+          const updatedIds = Array.from(new Set([...currentIds, ...newIds]));
+          await AsyncStorage.setItem("my_uploads", JSON.stringify(updatedIds));
+          setMyUploadsIds(updatedIds);
+          console.log("[UPLOAD] Tracked IDs saved:", newIds.length);
+        }
+      } catch (trackErr) {
+        console.error("Failed to track upload IDs:", trackErr);
+      }
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setIsUploadModalVisible(false);
+      setCustomCategory("");
+      Alert.alert("Success", `${previewImages.length} memories added to gallery!`, [{ text: "Awesome" }]);
+      fetchPhotos();
+    } catch (error) {
+      console.error("Upload error:", error);
+      Alert.alert("Error", "Failed to upload images. Server might be down.");
+    } finally {
+      setUploading(false);
+      setPreviewImages([]);
+      setNewTitles([]);
+    }
+  };
+
+
+
+  const renderFolderItem = useCallback(({ item }: { item: any }) => (
+    <MemoizedFolderItem
+      item={item}
+      onPress={(name) => {
+        Haptics.selectionAsync();
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        setSelectedFolder(name);
+        setViewMode("photos");
+      }}
+      onActions={handleFolderActions}
+    />
+  ), [handleFolderActions]);
+
+  const filteredPhotos = photos.filter(p => {
+    // PUBLIC GRID: Show ALL approved photos (including own)
+    if (p.status === 'approved') return true;
+    return false;
+  }).filter(p => {
+    if (!selectedFolder) return true;
+    const pFolder = (p.folder || "General").trim().toLowerCase();
+    const sFolder = selectedFolder.trim().toLowerCase();
+    return pFolder === sFolder;
+  });
+
+  const renderPhotoItem = useCallback(({ item, index }: { item: Photo, index: number }) => (
+    <MemoizedPhotoItem
+      item={item}
+      index={index}
+      onPress={(photo) => {
+        Haptics.selectionAsync();
+        const photoIdx = filteredPhotos.findIndex(p => p._id === photo._id);
+        setViewerIndex(photoIdx >= 0 ? photoIdx : 0);
+        setViewerOpen(true);
+        incrementView(photo._id);
+      }}
+      onActions={handlePhotoActions}
+    />
+  ), [filteredPhotos, user, handlePhotoActions]);
+
+  if (loading) {
+    return (
+      <View style={styles.container}>
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={scrollToTop}
+          style={styles.header}
+        >
+          <BlurView intensity={90} tint="light" style={StyleSheet.absoluteFill} />
+          <Text style={styles.headerTitle}>All Photos</Text>
+          <Text style={styles.headerSubtitle}>Loading memories...</Text>
+        </TouchableOpacity>
+        <View style={styles.listContent}>
+          <View style={styles.columnWrapper}>
+            {[1, 2, 3, 4, 5, 6].map((i) => (
+              <ShimmerLoader
+                key={i}
+                width={CARD_WIDTH}
+                height={CARD_WIDTH * 1.2}
+                borderRadius={20}
+                style={{ marginBottom: 20 }}
+              />
+            ))}
+          </View>
+        </View>
+      </View>
+    );
+  }
+
+
+  const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
   return (
     <View style={styles.container}>
-      <Text style={styles.header}>Gallery</Text>
+      <StatusBar barStyle="dark-content" />
 
-      <FlatList
-        data={photos}
-        keyExtractor={(item) => item.id}
-        renderItem={renderItem}
+      {/* Premium Header */}
+      <TouchableOpacity
+        activeOpacity={0.7}
+        onPress={scrollToTop}
+        style={styles.header}
+      >
+        <BlurView intensity={95} tint="light" style={StyleSheet.absoluteFill} />
+        <LinearGradient
+          colors={["#007AFF", "#00C6FF"]}
+          style={StyleSheet.absoluteFill}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+        />
+        <View style={styles.headerRow}>
+          {viewMode === "photos" ? (
+            <TouchableOpacity
+              onPress={handleBackToFolders}
+              style={styles.backBtn}
+            >
+              <Text style={styles.backIcon}>←</Text>
+            </TouchableOpacity>
+          ) : (
+            <Image source={{ uri: LOGO_PHOTO }} style={styles.headerLogo} contentFit="contain" />
+          )}
+          <TouchableOpacity
+            activeOpacity={viewMode === "photos" ? 0.7 : 1}
+            onPress={viewMode === "photos" ? handleBackToFolders : undefined}
+            style={{ flex: 1, marginLeft: viewMode === "photos" ? 0 : 12 }}
+          >
+            <Text style={styles.headerTitle}>
+              {viewMode === "folders" ? "All Photos" : (selectedFolder || "All Photos")}
+            </Text>
+            <Text style={styles.headerSubtitle}>
+              {viewMode === "folders" ? `${getFolders().length} Folders` : `${filteredPhotos.length} Memories`}
+            </Text>
+          </TouchableOpacity>
+
+
+        </View>
+      </TouchableOpacity>
+
+      <Animated.FlatList
+        data={(viewMode === "folders" ? getFolders() : filteredPhotos) as any}
+        keyExtractor={(item: any) => viewMode === "folders" ? item.name : item._id}
+        renderItem={viewMode === "folders" ? renderFolderItem : renderPhotoItem}
+        numColumns={COLUMN_COUNT}
+        key={viewMode}
         showsVerticalScrollIndicator={false}
-        ListEmptyComponent={
-          <Text style={styles.empty}>No photos available</Text>
+        contentContainerStyle={styles.listContent}
+        columnWrapperStyle={styles.columnWrapper}
+        itemLayoutAnimation={LinearTransition}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#007AFF" />
         }
+        ListEmptyComponent={
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyText}>No photos found.</Text>
+            <Text style={{ color: '#999', marginTop: 10 }}>Pull down to refresh</Text>
+          </View>
+        }
+      />
+
+      {/* FAB - Upload Button */}
+      <Animated.View
+        entering={FadeInDown.delay(600).springify()}
+        style={styles.fabContainer}
+      >
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={pickImage}
+          disabled={uploading}
+          activeOpacity={0.7}
+        >
+          {uploading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.fabIcon}>+</Text>
+          )}
+        </TouchableOpacity>
+      </Animated.View>
+
+      {/* Upload Modal */}
+      <Modal visible={isUploadModalVisible} transparent animationType="slide" onRequestClose={() => setIsUploadModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Upload {previewImages.length} Memories</Text>
+
+            <View style={{ maxHeight: 400 }}>
+              <FlatList
+                data={previewImages}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                keyExtractor={(item, index) => index.toString()}
+                renderItem={({ item, index }) => (
+                  <View style={styles.multiPreviewContainer}>
+                    <Image source={{ uri: item }} style={styles.multiPreviewImage} />
+                    <TextInput
+                      style={styles.multiTitleInput}
+                      placeholder={`Title for photo #${index + 1}`}
+                      value={newTitles[index]}
+                      onChangeText={(text) => {
+                        const updated = [...newTitles];
+                        updated[index] = text;
+                        setNewTitles(updated);
+                      }}
+                      placeholderTextColor="#999"
+                    />
+                  </View>
+                )}
+                contentContainerStyle={{ paddingBottom: 10 }}
+              />
+            </View>
+
+            <Text style={styles.label}>Category</Text>
+            <View style={styles.categoryContainer}>
+              {["College Events", "Placements", "Sports", "Campus Life", "Other"].map((cat) => (
+                <TouchableOpacity
+                  key={cat}
+                  style={[
+                    styles.categoryChip,
+                    newCategory === cat && styles.categoryChipSelected,
+                  ]}
+                  onPress={() => setNewCategory(cat)}
+                >
+                  <Text
+                    style={[
+                      styles.categoryText,
+                      newCategory === cat && styles.categoryTextSelected,
+                    ]}
+                  >
+                    {cat}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {newCategory === "Other" && (
+              <TextInput
+                style={[styles.input, { marginBottom: 15 }]}
+                placeholder="Enter custom category..."
+                value={customCategory}
+                onChangeText={setCustomCategory}
+                placeholderTextColor="#999"
+              />
+            )}
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity onPress={() => setIsUploadModalVisible(false)} style={styles.actionButton}>
+                <Text style={styles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={uploadImage} disabled={uploading} style={styles.actionButton}>
+                {uploading ? (
+                  <ActivityIndicator color="#007AFF" />
+                ) : (
+                  <Text style={styles.createText}>Upload All</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+
+
+      {/* Premium Photo Viewer */}
+      <PhotoViewer
+        visible={viewerOpen && isFocused}
+        photos={filteredPhotos}
+        startIndex={viewerIndex}
+        onClose={() => setViewerOpen(false)}
+        onSwipe={(index) => {
+          setViewerIndex(index);
+          const p = filteredPhotos[index];
+          if (p) incrementView(p._id);
+        }}
+        onRename={async (id, newTitle) => {
+          await api.patch(`/upload/${id}`, { title: newTitle });
+          setPhotos(prev => prev.map(p => p._id === id ? { ...p, title: newTitle } : p));
+        }}
+        onDelete={async (id) => {
+          await api.delete(`/upload/${id}`);
+          setPhotos(prev => prev.filter(p => p._id !== id));
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }}
       />
     </View>
   );
@@ -128,66 +964,559 @@ export default function GalleryScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 16,
+    backgroundColor: "#ffffff", // Clean white background
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
     backgroundColor: "#fff",
   },
   header: {
-    fontSize: 22,
+    paddingHorizontal: 25,
+    paddingTop: 65,
+    paddingBottom: 25,
+    borderBottomLeftRadius: 35,
+    borderBottomRightRadius: 35,
+    overflow: 'hidden',
+    zIndex: 100,
+    elevation: 8,
+  },
+  backBtn: {
+    marginRight: 15,
+    padding: 5,
+  },
+  backIcon: {
+    fontSize: 24,
+    color: "#007AFF",
     fontWeight: "bold",
-    marginBottom: 15,
+  },
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: "900",
+    color: "#fff",
+    letterSpacing: -0.8,
+  },
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  headerLogo: {
+    width: 45,
+    height: 45,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    padding: 2,
+  },
+  sparkles: {
+    fontSize: 24,
+  },
+  backButton: {
+    marginRight: 15,
+    padding: 10,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    borderRadius: 12,
+  },
+  backButtonText: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#fff",
+  },
+  headerSubtitle: {
+    fontSize: 14,
+    color: "rgba(255,255,255,0.85)",
+    fontWeight: "600",
+    marginTop: 2,
+  },
+  listContent: {
+    paddingHorizontal: 15,
+    paddingTop: 20,
+    paddingBottom: 100, // Space for FAB
+  },
+  columnWrapper: {
+    justifyContent: "space-between",
+  },
+  folderCard: {
+    width: CARD_WIDTH,
+    backgroundColor: "#fff",
+    borderRadius: 22,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: "#E6F2FF",
+    shadowColor: "#007AFF",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 5,
+    overflow: "hidden",
+  },
+  folderImageContainer: {
+    width: "100%",
+    height: CARD_WIDTH * 0.8,
+    backgroundColor: "#f8f8f8",
+  },
+  folderIconContainer: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    backgroundColor: '#007AFF', // Solid Elite Blue for contrast
+    padding: 8,
+    borderRadius: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  folderIcon: {
+    width: 22,
+    height: 22,
+  },
+  folderPreview: {
+    width: "100%",
+    height: "100%",
+  },
+  folderDeleteBtn: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    padding: 8,
+    borderRadius: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  folderInfo: {
+    padding: 12,
+  },
+  folderTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 2,
+  },
+  smallFolderIcon: {
+    width: 16,
+    height: 16,
+    marginRight: 6,
+    tintColor: "#007AFF",
+  },
+  folderName: {
+    fontSize: 15,
+    fontWeight: "bold",
+    color: "#1a1a1a",
+    flex: 1,
+  },
+  folderCount: {
+    fontSize: 12,
+    color: "#888",
+    marginLeft: 22, // Align with text after icon
   },
   card: {
-    backgroundColor: "#f2f2f2",
-    borderRadius: 10,
-    marginBottom: 20,
-    overflow: "hidden",
+    width: CARD_WIDTH,
+    height: CARD_WIDTH * 1.3, // Slightly taller for info
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    marginBottom: 15,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+    overflow: "hidden", // Clip image to rounded corners
   },
   image: {
     width: "100%",
-    height: 180,
+    height: "100%",
   },
-  title: {
-    fontSize: 16,
-    fontWeight: "600",
-    padding: 10,
+  cardOverlay: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "rgba(0,0,0,0.6)", // Semi-transparent black
+    paddingVertical: 10,
+    paddingHorizontal: 12,
   },
-  actions: {
+  cardHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
-    padding: 10,
-  },
-  editBtn: {
-    backgroundColor: "#007AFF",
-    padding: 10,
-    borderRadius: 6,
+    alignItems: "center",
+    marginBottom: 2,
   },
   deleteBtn: {
-    backgroundColor: "#FF3B30",
-    padding: 10,
-    borderRadius: 6,
+    padding: 4,
   },
-  saveBtn: {
-    backgroundColor: "#34C759",
-    padding: 10,
-    margin: 10,
-    borderRadius: 6,
-    alignItems: "center",
+  trashIcon: {
+    width: 16,
+    height: 16,
   },
-  btnText: {
+  cardCategory: {
+    color: "#FFD700",
+    fontSize: 10,
+    fontWeight: "bold",
+    textTransform: "uppercase",
+    marginBottom: 2,
+  },
+  cardTitle: {
     color: "#fff",
+    fontSize: 13,
     fontWeight: "600",
   },
-  input: {
-    backgroundColor: "#fff",
-    margin: 10,
-    padding: 10,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: "#ccc",
+  emptyState: {
+    alignItems: "center",
+    marginTop: 100,
   },
-  empty: {
-    textAlign: "center",
-    marginTop: 50,
-    color: "#888",
+  emptyText: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#007AFF",
+  },
+  emptySubtext: {
+    fontSize: 16,
+    color: "#666",
+    marginTop: 10,
+  },
+  fabContainer: {
+    position: "absolute",
+    bottom: 110, // Raised to avoid tab bar collision
+    alignSelf: "center",
+  },
+  fab: {
+    width: 65,
+    height: 65,
+    borderRadius: 32.5,
+    backgroundColor: "#007AFF",
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#007AFF",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  fabIcon: {
+    fontSize: 32,
+    color: "#fff",
+    lineHeight: 34, // Adjust visual center
+  },
+  // Upload Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalContent: {
+    width: "85%",
+    backgroundColor: "#fff",
+    padding: 24,
+    borderRadius: 20,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 15,
+    elevation: 10,
+  },
+  modalTitle: { fontSize: 22, fontWeight: "bold", marginBottom: 20, textAlign: "center", color: "#333" },
+  label: { fontSize: 14, fontWeight: "700", color: "#555", marginBottom: 8, marginTop: 15 },
+  input: {
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 16,
+    backgroundColor: "#F8F9FA",
+    color: "#333",
+  },
+  categoryContainer: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginBottom: 20,
+  },
+  categoryChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    backgroundColor: "#F0F0F0",
+    borderRadius: 25,
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  categoryChipSelected: {
+    backgroundColor: "#007AFF",
+  },
+  categoryText: {
+    fontSize: 13,
+    color: "#555",
+    fontWeight: "500",
+  },
+  categoryTextSelected: {
+    color: "#fff",
+    fontWeight: "700",
+  },
+  previewImage: {
+    width: "100%",
+    height: 180,
+    borderRadius: 12,
+    marginBottom: 10,
+    resizeMode: "cover",
+  },
+  modalActions: { flexDirection: "row", justifyContent: "space-between", marginTop: 20 },
+  actionButton: { padding: 10 },
+  cancelText: { color: "#FF3B30", fontSize: 17, fontWeight: "600" },
+  createText: { color: "#007AFF", fontSize: 17, fontWeight: "bold" },
+
+  multiPreviewContainer: {
+    width: 250,
+    marginRight: 15,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 16,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#eee',
+  },
+  multiPreviewImage: {
+    width: '100%',
+    height: 150,
+    borderRadius: 12,
+    marginBottom: 10,
+  },
+  multiTitleInput: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 8,
+    fontSize: 14,
+    color: '#333',
+  },
+
+  // Zoom Styles
+  zoomContainer: {
+    flex: 1,
+    backgroundColor: "#000",
+  },
+  fullImage: {
+    width: width,
+    height: "80%",
+  },
+  closeButton: {
+    position: "absolute",
+    right: 25,
+    zIndex: 110,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: 'rgba(50,50,50,0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.4)',
+  },
+  pagerIndicator: {
+    position: "absolute",
+    left: 25,
+    zIndex: 110,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 25,
+    backgroundColor: 'rgba(50,50,50,0.8)',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.4)',
+  },
+  indicatorText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+  },
+  fullscreenInfo: {
+    position: 'absolute',
+    bottom: 40,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    padding: 20,
+    borderRadius: 20,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  editIconBtn: {
+    padding: 10,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 12,
+  },
+  editIcon: {
+    width: 24,
+    height: 24,
+  },
+  editContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  editInput: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
+    borderBottomWidth: 1,
+    borderBottomColor: '#007AFF',
+    paddingVertical: 5,
+    marginRight: 10,
+  },
+  saveBtn: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 10,
+    marginRight: 10,
+  },
+  saveBtnText: {
+    color: '#fff',
+    fontWeight: 'bold',
+  },
+  cancelBtn: {
+    padding: 5,
+  },
+  cancelBtnText: {
+    color: '#fff',
+    fontSize: 20,
+  },
+  fullscreenTitle: {
+    color: '#fff',
+    fontSize: 22,
+    fontWeight: '900',
+    letterSpacing: -0.5,
+  },
+  fullscreenCategory: {
+    color: '#00C6FF',
+    fontSize: 14,
+    fontWeight: '700',
+    marginTop: 2,
+    textTransform: 'uppercase',
+  },
+  retryBtn: {
+    marginTop: 15,
+    backgroundColor: "#007AFF",
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+    elevation: 2,
+  },
+  retryText: {
+    color: "#fff",
+    fontWeight: "bold",
+    fontSize: 14,
+  },
+  statusOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.2)',
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  statusBadgePending: {
+    backgroundColor: 'rgba(255,165,0,0.85)', // Orange/Gold for pending
+  },
+  statusBadgeRejected: {
+    backgroundColor: 'rgba(255,59,48,0.85)', // Red for rejected
+  },
+  statusBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '900',
+    marginLeft: 4,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  myUploadsBtn: {
+    padding: 10,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 15,
+  },
+  badge: {
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    backgroundColor: '#FF3B30',
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#007AFF',
+  },
+  badgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  myUploadsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.1)',
+  },
+  myUploadsTitle: {
+    color: '#fff',
+    fontSize: 24,
+    fontWeight: 'bold',
+  },
+  myUploadItem: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 15,
+    padding: 12,
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  myUploadThumb: {
+    width: 60,
+    height: 60,
+    borderRadius: 10,
+  },
+  myUploadInfo: {
+    flex: 1,
+    marginLeft: 15,
+  },
+  myUploadTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  myUploadMeta: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  myUploadStatus: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    marginTop: 5,
+  },
+  statusApproved: { backgroundColor: '#4CD964' },
+  statusRejected: { backgroundColor: '#FF3B30' },
+  statusPending: { backgroundColor: '#FF9500' },
+  myUploadStatusText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: 'bold',
   },
 });

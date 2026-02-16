@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+mobile/node_modules/
+backend/node_modules/
+
+# Expo
+.expo/
+*.jks
+*.p8
+*.pkcs12
+*.pem
+*.key
+*.mobileprovision
+
+# Distribution/Build
+dist/
+build/
+web-build/
+
+# Local env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Backend specific
+backend/.env
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

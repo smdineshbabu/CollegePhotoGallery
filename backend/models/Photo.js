@@ -1,27 +1,26 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
-const photoSchema = new mongoose.Schema(
-  {
-    filename: {
-      type: String,
-      required: true,
-    },
-    path: {
-      type: String,
-      required: true,
-    },
-    uploadedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
-    uploaderRole: {
-      type: String,
-      enum: ["student", "mentor", "admin"],
-      required: true,
-    },
+const photoSchema = new mongoose.Schema({
+  imageUrl: String,
+  title: String,
+  folder: {
+    type: String,
+    default: "General",
+    required: true,
   },
-  { timestamps: true }
-);
+  views: {
+    type: Number,
+    default: 0,
+  },
+  thumbnailUrl: {
+    type: String
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected'],
+    default: 'pending'
+  }
+}, { timestamps: true });
 
-module.exports = mongoose.model("Photo", photoSchema);
+
+export default mongoose.model("Photo", photoSchema);
