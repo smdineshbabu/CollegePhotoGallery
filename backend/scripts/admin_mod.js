@@ -59,11 +59,13 @@ async function moderate() {
                 }
             }
             else if (action.toLowerCase() === 'r') {
+                const reason = await question("Reason for rejection? (e.g., Irrelevant, Blurry): ");
                 const rejectRes = await fetch(`${API_BASE}/reject/${photo._id}`, {
                     method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' }
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rejectionReason: reason })
                 });
-                if (rejectRes.ok) console.log("🗑️ Rejected (Marked as rejected).");
+                if (rejectRes.ok) console.log(`🗑️ Rejected. Reason: ${reason}`);
                 else {
                     const data = await rejectRes.json().catch(() => ({}));
                     console.log(`❌ Failed to reject: ${rejectRes.status} ${data.message || ''}`);

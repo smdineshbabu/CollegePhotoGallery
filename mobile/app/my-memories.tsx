@@ -31,6 +31,7 @@ type Photo = {
     thumbnailUrl?: string;
     folder: string;
     status: 'pending' | 'approved' | 'rejected';
+    rejectionReason?: string;
 };
 
 export default function MyMemoriesScreen() {

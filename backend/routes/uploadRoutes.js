@@ -143,9 +143,10 @@ router.patch("/approve/:id", auth, async (req, res) => {
 // REJECT a photo (admin only)
 router.patch("/reject/:id", auth, async (req, res) => {
   try {
+    const { rejectionReason } = req.body;
     const photo = await Photo.findByIdAndUpdate(
       req.params.id,
-      { status: 'rejected' },
+      { status: 'rejected', rejectionReason: rejectionReason || "No reason provided" },
       { new: true }
     );
     if (!photo) return res.status(404).json({ message: "Photo not found" });

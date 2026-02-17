@@ -311,6 +311,15 @@ export default function PhotoViewer({
                                         {photo?.folder || "Memory"}
                                     </Text>
                                 </View>
+                                {photo?.status === 'rejected' && (
+                                    <View style={styles.rejectionSection}>
+                                        <Ionicons name="warning-outline" size={14} color="#FF6B6B" />
+                                        <Text style={styles.rejectionTitle}>Admin Reason:</Text>
+                                        <Text style={styles.rejectionReason} numberOfLines={3}>
+                                            {photo?.rejectionReason || "No reason specified"}
+                                        </Text>
+                                    </View>
+                                )}
                             </View>
 
                             {/* Action Buttons */}
@@ -550,6 +559,30 @@ const styles = StyleSheet.create({
         fontWeight: "700",
         textTransform: "uppercase",
         letterSpacing: 0.8,
+    },
+    rejectionSection: {
+        flexDirection: "row",
+        alignItems: "flex-start",
+        gap: 6,
+        marginTop: 12,
+        padding: 12,
+        backgroundColor: "rgba(255,107,107,0.12)",
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: "rgba(255,107,107,0.2)",
+    },
+    rejectionTitle: {
+        color: "#FF6B6B",
+        fontSize: 12,
+        fontWeight: "800",
+        textTransform: "uppercase",
+    },
+    rejectionReason: {
+        flex: 1,
+        color: "rgba(255,255,255,0.9)",
+        fontSize: 13,
+        fontWeight: "500",
+        lineHeight: 18,
     },
 
     // ─ Action Buttons ─

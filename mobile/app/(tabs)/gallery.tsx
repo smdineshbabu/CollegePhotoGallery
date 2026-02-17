@@ -53,6 +53,7 @@ type Photo = {
   thumbnailUrl?: string; // High-speed thumbnail
   folder: string;
   status: 'pending' | 'approved' | 'rejected';
+  rejectionReason?: string;
 };
 
 export default function GalleryScreen() {
