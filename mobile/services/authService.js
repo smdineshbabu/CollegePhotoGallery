@@ -35,5 +35,7 @@ export const isAuthenticated = async () => {
 };
 
 export const getCurrentUser = async () => {
-  return await authStorage.getAuthUser();
+  const user = await authStorage.getAuthUser();
+  console.log("[AUTH] getCurrentUser returning:", user ? user._id : "null");
+  return user;
 };

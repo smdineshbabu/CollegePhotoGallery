@@ -7,6 +7,7 @@ import os from "os";
 import { fileURLToPath } from "url";
 import Photo from "../models/Photo.js";
 import { auth, checkRole } from "../middleware/auth.js";
+import archiver from "archiver";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -237,6 +238,29 @@ router.patch("/:id/view", async (req, res) => {
   }
 });
 
+// BULK MOVE photos to a new folder
+router.patch("/bulk-move", auth, async (req, res) => {
+  try {
+    const { ids, folder } = req.body;
+    if (!ids || !Array.isArray(ids) || !folder) {
+      return res.status(400).json({ error: "IDs array and folder name are required" });
+    }
+
+    const result = await Photo.updateMany(
+      { _id: { $in: ids } },
+      { $set: { folder: folder } }
+    );
+
+    res.json({
+      message: `Successfully moved ${result.modifiedCount} photos to ${folder}`,
+      modifiedCount: result.modifiedCount
+    });
+  } catch (err) {
+    console.error("Bulk move error:", err);
+    res.status(500).json({ error: "Failed to perform bulk move" });
+  }
+});
+
 // Update photo metadata
 router.patch("/:id", async (req, res) => {
   const { id } = req.params;
@@ -291,6 +315,94 @@ router.patch("/folder/rename", auth, async (req, res) => {
   } catch (err) {
     console.error("Folder rename error:", err);
     res.status(500).json({ error: "Failed to rename folder" });
+  }
+});
+
+// BATCH DOWNLOAD (Admin only ideally, but public for now for ease)
+router.get("/batch-download", async (req, res) => {
+  try {
+    const photos = await Photo.find({ status: 'approved' });
+    if (photos.length === 0) {
+      return res.status(404).json({ message: "No approved photos to download" });
+    }
+
+    const archive = archiver('zip', {
+      zlib: { level: 9 } // Sets the compression level.
+    });
+
+    res.attachment('gallery_memories.zip');
+
+    archive.on('error', function (err) {
+      res.status(500).send({ error: err.message });
+    });
+
+    archive.pipe(res);
+
+    photos.forEach(photo => {
+      const filename = photo.imageUrl.split("/uploads/")[1];
+      const filePath = path.join(__dirname, "../uploads", filename);
+      if (fs.existsSync(filePath)) {
+        archive.file(filePath, { name: photo.title.replace(/[^\w\s]/gi, '') + "_" + filename });
+      }
+    });
+
+    await archive.finalize();
+  } catch (err) {
+    console.error("Batch download error:", err);
+    res.status(500).json({ error: "Failed to create archive" });
+  }
+});
+
+// AI MODERATION SCAN (Mock)
+router.post("/ai-scan", async (req, res) => {
+  try {
+    const pendingPhotos = await Photo.find({ status: 'pending' });
+    let flaggedCount = 0;
+
+    for (const photo of pendingPhotos) {
+      const lowerTitle = photo.title.toLowerCase();
+      // Simulate AI flagging certain criteria
+      if (lowerTitle.includes("recovered") || lowerTitle.includes("restored") || photo.title.length < 5) {
+        photo.status = 'rejected';
+        photo.rejectionReason = "[AI FLAG] Potentially low quality or placeholder title.";
+        await photo.save();
+        flaggedCount++;
+      }
+    }
+
+    res.json({ message: `AI Scan complete. ${flaggedCount} photos flagged and rejected.`, flaggedCount });
+  } catch (err) {
+    console.error("AI Scan error:", err);
+    res.status(500).json({ error: "Failed to perform AI scan" });
+  }
+});
+
+// LIKE/UNLIKE PHOTO
+router.patch("/:id/like", auth, async (req, res) => {
+  try {
+    const photo = await Photo.findById(req.params.id);
+    if (!photo) return res.status(404).json({ error: "Photo not found" });
+
+    // Initialize likes array if it doesn't exist (legacy photos)
+    if (!photo.likes) photo.likes = [];
+
+    const userIndex = photo.likes.indexOf(req.user.id);
+    if (userIndex === -1) {
+      // Like
+      photo.likes.push(req.user.id);
+    } else {
+      // Unlike
+      photo.likes.splice(userIndex, 1);
+    }
+
+    await photo.save();
+    res.json({
+      likesCount: photo.likes.length,
+      isLiked: photo.likes.includes(req.user.id)
+    });
+  } catch (err) {
+    console.error("Like error:", err);
+    res.status(500).json({ error: "Failed to toggle like" });
   }
 });
 

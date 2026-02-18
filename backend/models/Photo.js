@@ -12,6 +12,10 @@ const photoSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  uploadedBy: {
+    type: String,
+    default: "Guest"
+  },
   thumbnailUrl: {
     type: String
   },
@@ -23,6 +27,11 @@ const photoSchema = new mongoose.Schema({
   rejectionReason: {
     type: String,
     default: ""
+  },
+  likes: {
+    type: [mongoose.Schema.Types.ObjectId],
+    ref: 'User',
+    default: []
   }
 }, { timestamps: true });
 

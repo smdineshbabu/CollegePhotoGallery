@@ -43,7 +43,8 @@ api.interceptors.request.use(async (config) => {
   }
 
   // Debug log to help track connectivity issues
-  console.log(`[API] Request: ${config.method?.toUpperCase()} ${config.url} | Base: ${config.baseURL}`);
+  console.log(`[API] --- Request: ${config.method?.toUpperCase()} ${config.url} ---`);
+  console.log(`[API] BaseURL: ${config.baseURL}`);
 
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;

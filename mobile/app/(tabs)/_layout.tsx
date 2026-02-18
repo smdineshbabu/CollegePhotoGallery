@@ -72,6 +72,30 @@ export default function TabLayout() {
           )
         }}
       />
+      <Tabs.Screen
+        name="requests"
+        options={{
+          title: "Connect",
+          tabBarIcon: ({ color }) => (
+            <Image
+              source={{ uri: `https://img.icons8.com/fluency/48/chat.png` }}
+              style={{ width: 26, height: 26, opacity: color === "#8E8E93" ? 0.5 : 1 }}
+            />
+          )
+        }}
+      />
+      <Tabs.Screen
+        name="analytics"
+        options={{
+          title: "Stats",
+          tabBarIcon: ({ color }) => (
+            <Image
+              source={{ uri: `https://img.icons8.com/fluency/48/analytics.png` }}
+              style={{ width: 26, height: 26, opacity: color === "#8E8E93" ? 0.5 : 1 }}
+            />
+          )
+        }}
+      />
     </Tabs>
   );
 }

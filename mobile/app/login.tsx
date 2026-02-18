@@ -128,14 +128,14 @@ export default function LoginScreen() {
                 </TouchableOpacity>
 
                 <View style={styles.headerContainer}>
-                    <Image
-                        source="https://img.icons8.com/fluency/144/camera.png"
-                        style={styles.logo}
-                        transition={300}
-                    />
-                    <Text style={styles.title}>College Gallery</Text>
+                    <View style={styles.iconContainer}>
+                        <Ionicons name="log-in-outline" size={40} color="#fff" />
+                    </View>
+                    <Text style={styles.title}>
+                        {isLogin ? "Welcome Back" : "Create Account"}
+                    </Text>
                     <Text style={styles.subtitle}>
-                        {isLogin ? "Welcome back, scholar!" : "Start sharing your memories"}
+                        {isLogin ? "Sign in to continue" : "Sign up to start sharing memories"}
                     </Text>
                 </View>
 
@@ -209,7 +209,7 @@ export default function LoginScreen() {
                     >
                         <Text style={styles.secondaryButtonText}>
                             {isLogin
-                                ? "Don't have an account? Sign Up"
+                                ? "New user? Sign Up"
                                 : "Already have an account? Sign In"}
                         </Text>
                     </TouchableOpacity>
@@ -281,17 +281,24 @@ const styles = StyleSheet.create({
     headerContainer: {
         alignItems: "center",
         marginBottom: 40,
+        marginTop: 20,
     },
-    logo: {
+    iconContainer: {
         width: 80,
         height: 80,
-        marginBottom: 15,
+        borderRadius: 25,
+        backgroundColor: "rgba(0, 122, 255, 0.1)", // Light blue bg
+        justifyContent: "center",
+        alignItems: "center",
+        marginBottom: 20,
     },
+    // logo: { ... removed ... }
     title: {
         fontSize: 32,
-        fontWeight: "800",
+        fontWeight: "bold",
         color: "#1A1A1A",
         letterSpacing: -0.5,
+        marginBottom: 8,
     },
     subtitle: {
         fontSize: 16,

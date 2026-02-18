@@ -14,6 +14,7 @@ export const getAuthToken = async () => {
 
 export const getAuthUser = async () => {
   const user = await AsyncStorage.getItem(USER_KEY);
+  console.log("[AUTH-STORAGE] Raw user from storage:", user);
   return user ? JSON.parse(user) : null;
 };
 

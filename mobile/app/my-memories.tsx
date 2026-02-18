@@ -193,15 +193,9 @@ export default function MyMemoriesScreen() {
                 startIndex={viewerIndex}
                 onClose={() => setViewerOpen(false)}
                 onSwipe={(index) => setViewerIndex(index)}
-                // Reuse delete/rename logic if needed, or keep read-only for now
                 onRename={async (id, newTitle) => {
                     await api.patch(`/upload/${id}`, { title: newTitle });
                     setPhotos(prev => prev.map(p => p._id === id ? { ...p, title: newTitle } : p));
-                }}
-                onDelete={async (id) => {
-                    await api.delete(`/upload/${id}`);
-                    setPhotos(prev => prev.filter(p => p._id !== id));
-                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                 }}
             />
         </View>

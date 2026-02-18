@@ -54,6 +54,8 @@ type Photo = {
   folder: string;
   status: 'pending' | 'approved' | 'rejected';
   rejectionReason?: string;
+  likes?: string[];
+  views?: number;
 };
 
 export default function GalleryScreen() {
@@ -63,6 +65,7 @@ export default function GalleryScreen() {
   const [viewerIndex, setViewerIndex] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [viewerOpen, setViewerOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
@@ -76,9 +79,6 @@ export default function GalleryScreen() {
   const selectedPhotoIdx = useRef<number>(0);
   const sessionViewedIds = useRef<Set<string>>(new Set());
   const [user, setUser] = useState<any>(null);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editingTitle, setEditingTitle] = useState("");
-  const [updating, setUpdating] = useState(false);
 
   const fetchUserData = async () => {
     const userData = await authService.getCurrentUser();
@@ -111,6 +111,34 @@ export default function GalleryScreen() {
   const [newCategory, setNewCategory] = useState("College Events");
   const [customCategory, setCustomCategory] = useState("");
   const [uploading, setUploading] = useState(false);
+
+  // Selection Mode State
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const toggleSelection = useCallback((id: string) => {
+    Haptics.selectionAsync();
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+
+      if (next.size === 0) {
+        setIsSelectionMode(false);
+      } else {
+        setIsSelectionMode(true);
+      }
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+    setIsSelectionMode(false);
+  }, []);
 
   const fetchPhotos = async (showLoading = true) => {
     try {
@@ -240,58 +268,30 @@ export default function GalleryScreen() {
     if (!id || sessionViewedIds.current.has(id)) return;
     try {
       sessionViewedIds.current.add(id);
-      await api.patch(`/ upload / ${id}/view`);
+      await api.patch(`/upload/${id}/view`);
     } catch (error) {
       // Log only in dev to keep UI clean
       if (__DEV__) console.log("View update failed:", id);
     }
   };
 
-  const handleUpdateTitle = async (id: string) => {
-    if (!editingTitle.trim()) {
-      Alert.alert("Error", "Title cannot be empty");
-      return;
-    }
-    try {
-      setUpdating(true);
-      await api.patch(`/upload/${id}`, { title: editingTitle });
-      setPhotos(prev => prev.map(p => p._id === id ? { ...p, title: editingTitle } : p));
-      setIsEditing(false);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch (error) {
-      console.error("Update error:", error);
-      Alert.alert("Error", "Failed to update title");
-    } finally {
-      setUpdating(false);
-    }
-  };
 
-  const startEditing = (currentTitle: string) => {
-    setEditingTitle(currentTitle);
-    setIsEditing(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
-
-  const handleDeletePhoto = async (id: string) => {
+  const handleDeletePhoto = (photo: Photo) => {
     Alert.alert(
-      "Delete Photo",
-      "Are you sure you want to delete this memory? This cannot be undone.",
+      "Admin Approval Required",
+      "Deletions are now handled via admin approval. Would you like to send a deletion request for this photo?",
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              setUpdating(true);
-              await api.delete(`/upload/${id}`);
-              setPhotos(prev => prev.filter(p => p._id !== id));
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            } catch (error) {
-              console.error("Delete photo error:", error);
-              Alert.alert("Error", "Failed to delete photo");
-            } finally {
-              setUpdating(false);
+          text: "Request Deletion",
+          onPress: () => {
+            // Find index and open viewer
+            const idx = filteredPhotos.findIndex(p => p._id === photo._id);
+            if (idx !== -1) {
+              setViewerIndex(idx);
+              setViewerOpen(true);
+              // The viewer will naturally show the 'Admin' and 'Delete' buttons
+              // and the user can proceed from there.
             }
           }
         }
@@ -299,82 +299,8 @@ export default function GalleryScreen() {
     );
   };
 
-  const handleDeleteFolder = async (folderName: string) => {
-    Alert.alert(
-      "Delete Folder",
-      `Are you sure you want to delete "${folderName}" and ALL photos inside? This cannot be undone.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete All",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              setLoading(true);
-              await api.delete(`/upload/folder/${folderName}`);
-              await fetchPhotos(); // Refresh to update folder list
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            } catch (error) {
-              console.error("Delete folder error:", error);
-              Alert.alert("Error", "Failed to delete folder");
-            } finally {
-              setLoading(false);
-            }
-          }
-        }
-      ]
-    );
-  };
 
-  const handleRenameFolder = async (oldName: string) => {
-    Alert.prompt(
-      "Rename Folder",
-      "Enter new name for this folder",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Rename",
-          onPress: async (newName?: string) => {
-            if (!newName || !newName.trim()) return;
-            const trimmed = newName.trim();
-            if (trimmed === oldName) return;
-            try {
-              setLoading(true);
-              await api.patch("/upload/folder/rename", { oldName, newName: trimmed });
 
-              // Update selected folder state if it was the one renamed
-              if (selectedFolder === oldName) {
-                setSelectedFolder(trimmed);
-              }
-
-              await fetchPhotos();
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            } catch (error) {
-              console.error("Rename folder error:", error);
-              Alert.alert("Error", "Failed to rename folder");
-            } finally {
-              setLoading(false);
-            }
-          }
-        }
-      ],
-      "plain-text",
-      oldName
-    );
-  };
-
-  const handleFolderActions = (folderName: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    Alert.alert(
-      "Folder Actions",
-      `What would you like to do with "${folderName}"?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Rename", onPress: () => handleRenameFolder(folderName) },
-        { text: "Delete", style: "destructive", onPress: () => handleDeleteFolder(folderName) },
-      ]
-    );
-  };
 
   const handlePhotoActions = (item: Photo) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
@@ -383,23 +309,18 @@ export default function GalleryScreen() {
       "What would you like to do with this memory?",
       [
         { text: "Cancel", style: "cancel" },
-        {
-          text: "Rename", onPress: () => {
-            startEditing(item.title);
-          }
-        },
-        { text: "Delete", style: "destructive", onPress: () => handleDeletePhoto(item._id) },
+        { text: "Delete", style: "destructive", onPress: () => handleDeletePhoto(item) },
       ]
     );
   };
 
 
-  const MemoizedFolderItem = memo(({ item, onPress, onActions }: { item: any; onPress: (name: string) => void, onActions: (name: string) => void }) => (
+  const MemoizedFolderItem = memo(({ item, onPress, onActions }: { item: any; onPress: (name: string) => void, onActions?: (name: string) => void }) => (
     <TouchableOpacity
       style={styles.folderCard}
       activeOpacity={0.8}
       onPress={() => onPress(item.name)}
-      onLongPress={() => onActions(item.name)}
+      onLongPress={() => onActions?.(item.name)}
     >
       <View style={styles.folderImageContainer}>
         <Image
@@ -421,20 +342,34 @@ export default function GalleryScreen() {
     </TouchableOpacity>
   ));
 
-  const MemoizedPhotoItem = memo(({ item, onPress, onActions, index }: {
+  const MemoizedPhotoItem = memo(({ item, onPress, onActions, onSelect, isSelected, isSelectionMode, index }: {
     item: Photo;
     onPress: (photo: Photo) => void;
     onActions: (photo: Photo) => void;
+    onSelect: (photoId: string) => void;
+    isSelected: boolean;
+    isSelectionMode: boolean;
     index: number;
   }) => (
     <View style={{ flex: 1 }}>
       <TouchableOpacity
-        style={styles.card}
+        style={[styles.card, isSelected && styles.cardSelected]}
         activeOpacity={0.8}
         onPress={() => {
-          onPress(item);
+          if (isSelectionMode) {
+            onSelect(item._id);
+          } else {
+            onPress(item);
+          }
         }}
-        onLongPress={() => onActions(item)}
+        onLongPress={() => {
+          if (!isSelectionMode) {
+            onSelect(item._id);
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          } else {
+            onActions(item);
+          }
+        }}
       >
         <Image
           source={{
@@ -473,6 +408,12 @@ export default function GalleryScreen() {
         >
           <View style={styles.cardHeader}>
             <Text style={styles.cardCategory}>{item.folder || "Event"}</Text>
+            {item.likes && item.likes.length > 0 && (
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Ionicons name="heart" size={10} color="#FF3B30" style={{ marginRight: 2 }} />
+                <Text style={[styles.cardCategory, { color: '#fff' }]}>{item.likes.length}</Text>
+              </View>
+            )}
           </View>
           <Text style={styles.cardTitle} numberOfLines={1}>{item.title || "Untitled"}</Text>
         </LinearGradient>
@@ -525,13 +466,6 @@ export default function GalleryScreen() {
   useFocusEffect(
     useCallback(() => {
       const backAction = () => {
-        if (isEditing) {
-          setIsEditing(false);
-          return true;
-        }
-
-
-
         if (viewMode === "photos") {
           handleBackToFolders();
           return true;
@@ -549,7 +483,7 @@ export default function GalleryScreen() {
         // Aggressively clear params when leaving context
         router.setParams({ folder: undefined, openMyUploads: undefined });
       };
-    }, [viewMode, isEditing])
+    }, [viewMode])
   );
 
   const viewabilityConfig = {
@@ -580,7 +514,9 @@ export default function GalleryScreen() {
       }
       folderMap[folderName].count++;
     });
-    return Object.values(folderMap).filter(f => f.name !== "Restored");
+    return Object.values(folderMap)
+      .filter(f => f.name !== "Restored")
+      .filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase()));
   };
 
   const pickImage = async () => {
@@ -698,6 +634,82 @@ export default function GalleryScreen() {
 
 
 
+  const handleBulkMove = () => {
+    if (selectedIds.size === 0) return;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+
+    Alert.alert(
+      "Bulk Move",
+      `Move ${selectedIds.size} items to which folder?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "College Events",
+          onPress: () => performBulkMove("College Events")
+        },
+        {
+          text: "Campus Life",
+          onPress: () => performBulkMove("Campus Life")
+        },
+        {
+          text: "Placements",
+          onPress: () => performBulkMove("Placements")
+        }
+      ]
+    );
+  };
+
+  const performBulkMove = async (folderName: string) => {
+    try {
+      setLoading(true);
+      const ids = Array.from(selectedIds);
+      await api.patch("/upload/bulk-move", { ids, folder: folderName });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert("Success", `Moved ${ids.length} items to ${folderName}`);
+      clearSelection();
+      fetchPhotos();
+    } catch (err) {
+      Alert.alert("Error", "Bulk move failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBulkDeleteRequest = () => {
+    if (selectedIds.size === 0) return;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+
+    Alert.alert(
+      "Bulk Delete Request",
+      `Are you sure you want to request deletion of ${selectedIds.size} items?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Yes, Request",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              setLoading(true);
+              const ids = Array.from(selectedIds);
+              await api.post("/requests/bulk-delete", {
+                photoIds: ids,
+                message: `Bulk deletion request for ${ids.length} photos.`
+              });
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              Alert.alert("Request Sent", "Admin will review your deletion request.");
+              clearSelection();
+              fetchPhotos();
+            } catch (err) {
+              Alert.alert("Error", "Batch request failed");
+            } finally {
+              setLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const renderFolderItem = useCallback(({ item }: { item: any }) => (
     <MemoizedFolderItem
       item={item}
@@ -707,25 +719,26 @@ export default function GalleryScreen() {
         setSelectedFolder(name);
         setViewMode("photos");
       }}
-      onActions={handleFolderActions}
     />
-  ), [handleFolderActions]);
+  ), []);
 
   const filteredPhotos = photos.filter(p => {
-    // PUBLIC GRID: Show ALL approved photos (including own)
-    if (p.status === 'approved') return true;
-    return false;
-  }).filter(p => {
-    if (!selectedFolder) return true;
+    if (p.status !== 'approved') return false;
+
     const pFolder = (p.folder || "General").trim().toLowerCase();
-    const sFolder = selectedFolder.trim().toLowerCase();
-    return pFolder === sFolder;
+    const sFolder = (selectedFolder || "").trim().toLowerCase();
+    const matchesFolder = !selectedFolder || pFolder === sFolder;
+    const matchesSearch = p.title.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesFolder && matchesSearch;
   });
 
   const renderPhotoItem = useCallback(({ item, index }: { item: Photo, index: number }) => (
     <MemoizedPhotoItem
       item={item}
       index={index}
+      isSelected={selectedIds.has(item._id)}
+      isSelectionMode={isSelectionMode}
+      onSelect={toggleSelection}
       onPress={(photo) => {
         Haptics.selectionAsync();
         const photoIdx = filteredPhotos.findIndex(p => p._id === photo._id);
@@ -735,7 +748,7 @@ export default function GalleryScreen() {
       }}
       onActions={handlePhotoActions}
     />
-  ), [filteredPhotos, user, handlePhotoActions]);
+  ), [filteredPhotos, user, handlePhotoActions, selectedIds, isSelectionMode, toggleSelection]);
 
   if (loading) {
     return (
@@ -746,8 +759,41 @@ export default function GalleryScreen() {
           style={styles.header}
         >
           <BlurView intensity={90} tint="light" style={StyleSheet.absoluteFill} />
-          <Text style={styles.headerTitle}>All Photos</Text>
-          <Text style={styles.headerSubtitle}>Loading memories...</Text>
+          <LinearGradient
+            colors={["#007AFF", "#00C6FF"]}
+            style={StyleSheet.absoluteFill}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+          />
+          <View style={styles.headerTopRow}>
+            <View>
+              <Text style={styles.headerTitle}>{viewMode === "folders" ? "Gallery" : selectedFolder}</Text>
+              <Text style={styles.headerSubtitle}>
+                {viewMode === "folders" ? "Tap a folder to browse" : `${filteredPhotos.length} memories found`}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => router.push("/(tabs)/requests")}>
+              <Ionicons name="chatbubble-ellipses-outline" size={24} color="#fff" />
+            </TouchableOpacity>
+          </View>
+
+          {/* Search Bar */}
+          <View style={styles.searchContainer}>
+            <Ionicons name="search" size={20} color="#fff" style={styles.searchIcon} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search memories..."
+              placeholderTextColor="rgba(255,255,255,0.8)"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              clearButtonMode="while-editing"
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchQuery("")} style={styles.clearSearch}>
+                <Ionicons name="close-circle" size={18} color="#8E8E93" />
+              </TouchableOpacity>
+            )}
+          </View>
         </TouchableOpacity>
         <View style={styles.listContent}>
           <View style={styles.columnWrapper}>
@@ -771,48 +817,76 @@ export default function GalleryScreen() {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle={isSelectionMode ? "light-content" : "dark-content"} />
 
-      {/* Premium Header */}
-      <TouchableOpacity
-        activeOpacity={0.7}
-        onPress={scrollToTop}
-        style={styles.header}
-      >
-        <BlurView intensity={95} tint="light" style={StyleSheet.absoluteFill} />
-        <LinearGradient
-          colors={["#007AFF", "#00C6FF"]}
-          style={StyleSheet.absoluteFill}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 0 }}
-        />
-        <View style={styles.headerRow}>
-          {viewMode === "photos" ? (
-            <TouchableOpacity
-              onPress={handleBackToFolders}
-              style={styles.backBtn}
-            >
-              <Text style={styles.backIcon}>←</Text>
-            </TouchableOpacity>
-          ) : (
-            <Image source={{ uri: LOGO_PHOTO }} style={styles.headerLogo} contentFit="contain" />
-          )}
-          <TouchableOpacity
-            activeOpacity={viewMode === "photos" ? 0.7 : 1}
-            onPress={viewMode === "photos" ? handleBackToFolders : undefined}
-            style={{ flex: 1, marginLeft: viewMode === "photos" ? 0 : 12 }}
-          >
-            <Text style={styles.headerTitle}>
-              {viewMode === "folders" ? "All Photos" : (selectedFolder || "All Photos")}
-            </Text>
-            <Text style={styles.headerSubtitle}>
-              {viewMode === "folders" ? `${getFolders().length} Folders` : `${filteredPhotos.length} Memories`}
-            </Text>
+      {isSelectionMode ? (
+        <View style={[styles.selectionHeader, { paddingTop: insets.top }]}>
+          <TouchableOpacity onPress={clearSelection} style={styles.selectionCancelBtn}>
+            <Text style={styles.selectionCancelText}>Cancel</Text>
           </TouchableOpacity>
-
-
+          <Text style={styles.selectionHeaderTitle}>{selectedIds.size} Selected</Text>
+          <View style={{ width: 60 }} />
         </View>
-      </TouchableOpacity>
+      ) : (
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={scrollToTop}
+          style={styles.header}
+        >
+          <BlurView intensity={95} tint="light" style={StyleSheet.absoluteFill} />
+          <LinearGradient
+            colors={["#007AFF", "#00C6FF"]}
+            style={StyleSheet.absoluteFill}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+          />
+          <View style={styles.headerTopRow}>
+            {viewMode === "photos" ? (
+              <TouchableOpacity
+                onPress={handleBackToFolders}
+                style={styles.backBtn}
+              >
+                <Text style={styles.backIcon}>←</Text>
+              </TouchableOpacity>
+            ) : (
+              <Image source={{ uri: LOGO_PHOTO }} style={styles.headerLogo} contentFit="contain" />
+            )}
+            <TouchableOpacity
+              activeOpacity={viewMode === "photos" ? 0.7 : 1}
+              onPress={viewMode === "photos" ? handleBackToFolders : undefined}
+              style={{ flex: 1, marginLeft: viewMode === "photos" ? 0 : 12 }}
+            >
+              <Text style={styles.headerTitle}>
+                {viewMode === "folders" ? "All Photos" : (selectedFolder || "All Photos")}
+              </Text>
+              <Text style={styles.headerSubtitle}>
+                {viewMode === "folders" ? `${getFolders().length} Folders` : `${filteredPhotos.length} Memories`}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => router.push("/(tabs)/requests")}>
+              <Ionicons name="chatbubble-ellipses-outline" size={24} color="#fff" />
+            </TouchableOpacity>
+          </View>
+
+          {/* Search Bar */}
+          <View style={styles.searchContainer}>
+            <Ionicons name="search" size={20} color="#fff" style={styles.searchIcon} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search memories..."
+              placeholderTextColor="rgba(255,255,255,0.8)"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              clearButtonMode="while-editing"
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchQuery("")} style={styles.clearSearch}>
+                <Ionicons name="close-circle" size={18} color="rgba(255,255,255,0.6)" />
+              </TouchableOpacity>
+            )}
+          </View>
+        </TouchableOpacity>
+      )}
 
       <Animated.FlatList
         data={(viewMode === "folders" ? getFolders() : filteredPhotos) as any}
@@ -942,22 +1016,39 @@ export default function GalleryScreen() {
         visible={viewerOpen && isFocused}
         photos={filteredPhotos}
         startIndex={viewerIndex}
+        currentUser={user}
         onClose={() => setViewerOpen(false)}
         onSwipe={(index) => {
           setViewerIndex(index);
           const p = filteredPhotos[index];
           if (p) incrementView(p._id);
         }}
-        onRename={async (id, newTitle) => {
-          await api.patch(`/upload/${id}`, { title: newTitle });
-          setPhotos(prev => prev.map(p => p._id === id ? { ...p, title: newTitle } : p));
-        }}
-        onDelete={async (id) => {
-          await api.delete(`/upload/${id}`);
-          setPhotos(prev => prev.filter(p => p._id !== id));
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        onLikeToggle={(id, isLiked, count) => {
+          setPhotos(prev => prev.map(p => {
+            if (p._id === id) {
+              const newLikes = isLiked
+                ? [...(p.likes || []), user?._id]
+                : (p.likes || []).filter((uid: string) => uid !== user?._id);
+              return { ...p, likes: newLikes };
+            }
+            return p;
+          }));
         }}
       />
+
+      {isSelectionMode && (
+        <View style={styles.bulkActionBar}>
+          <TouchableOpacity style={styles.bulkActionBtn} onPress={handleBulkMove}>
+            <Ionicons name="folder-open" size={24} color="#007AFF" />
+            <Text style={styles.bulkActionText}>Move</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.bulkActionBtn} onPress={handleBulkDeleteRequest}>
+            <Ionicons name="trash" size={24} color="#FF3B30" />
+            <Text style={[styles.bulkActionText, styles.bulkActionTextDanger]}>Delete</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 }
@@ -980,6 +1071,7 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 35,
     borderBottomRightRadius: 35,
     overflow: 'hidden',
+    backgroundColor: '#007AFF',
     zIndex: 100,
     elevation: 8,
   },
@@ -1001,6 +1093,33 @@ const styles = StyleSheet.create({
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
+  },
+  headerTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    borderRadius: 15,
+    paddingHorizontal: 12,
+    height: 44,
+  },
+  searchIcon: {
+    marginRight: 8,
+  },
+  searchInput: {
+    flex: 1,
+    height: '100%',
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  clearSearch: {
+    padding: 4,
   },
   headerLogo: {
     width: 45,
@@ -1519,5 +1638,88 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 10,
     fontWeight: 'bold',
+  },
+  cardSelected: {
+    borderColor: '#007AFF',
+    borderWidth: 2,
+    transform: [{ scale: 0.96 }],
+  },
+  selectionCircle: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    borderWidth: 2,
+    borderColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  selectionCircleActive: {
+    backgroundColor: '#007AFF',
+    borderColor: '#007AFF',
+  },
+  selectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    backgroundColor: '#007AFF',
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
+    zIndex: 200,
+  },
+  selectionHeaderTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  selectionCancelBtn: {
+    padding: 8,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 10,
+  },
+  selectionCancelText: {
+    color: '#fff',
+    fontWeight: 'bold',
+  },
+  bulkActionBar: {
+    position: 'absolute',
+    bottom: 25,
+    left: 20,
+    right: 20,
+    height: 70,
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    paddingHorizontal: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 15,
+    zIndex: 1000,
+  },
+  bulkActionBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 10,
+    flex: 1,
+  },
+  bulkActionText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#007AFF',
+    marginTop: 4,
+    textTransform: 'uppercase',
+  },
+  bulkActionTextDanger: {
+    color: '#FF3B30',
   },
 });

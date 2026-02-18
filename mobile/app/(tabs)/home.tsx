@@ -80,7 +80,15 @@ const ParallaxItem = memo(({ item, index, scrollX, onPress }: any) => {
         />
       </Animated.View>
       <LinearGradient colors={["transparent", "rgba(0,0,0,0.8)"]} style={styles.itemOverlay}>
-        <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
+          {item.likes && item.likes.length > 0 && (
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Ionicons name="heart" size={12} color="#FF3B30" style={{ marginRight: 2 }} />
+              <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>{item.likes.length}</Text>
+            </View>
+          )}
+        </View>
       </LinearGradient>
     </TouchableOpacity>
   );
@@ -608,20 +616,23 @@ export default function HomeScreen() {
         visible={viewerOpen && isFocused}
         photos={recentPhotos.slice(0, 10)}
         startIndex={viewerIndex}
+        currentUser={user}
         onClose={() => setViewerOpen(false)}
         onSwipe={(index: number) => {
           setViewerIndex(index);
           const p = recentPhotos[index];
           if (p) incrementView(p._id);
         }}
-        onRename={async (id: string, newTitle: string) => {
-          await api.patch(`/upload/${id}`, { title: newTitle });
-          setRecentPhotos(prev => prev.map(p => p._id === id ? { ...p, title: newTitle } : p));
-        }}
-        onDelete={async (id: string) => {
-          await api.delete(`/upload/${id}`);
-          setRecentPhotos(prev => prev.filter(p => p._id !== id));
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        onLikeToggle={(id, isLiked, count) => {
+          setRecentPhotos(prev => prev.map(p => {
+            if (p._id === id) {
+              const newLikes = isLiked
+                ? [...(p.likes || []), user?._id]
+                : (p.likes || []).filter((uid: string) => uid !== user?._id);
+              return { ...p, likes: newLikes };
+            }
+            return p;
+          }));
         }}
       />
 
