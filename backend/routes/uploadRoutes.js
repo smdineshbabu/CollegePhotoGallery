@@ -14,6 +14,60 @@ const __dirname = path.dirname(__filename);
 
 const router = express.Router();
 
+// GET Trending Photos (Weighted Likes + SuperLikes)
+router.get("/trending", async (req, res) => {
+  try {
+    const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+
+    // Aggregate to calculate a weighted score: (Likes * 5) + Views
+    const trendingPhotos = await Photo.aggregate([
+      {
+        $match: {
+          status: 'approved',
+          createdAt: { $gte: fortyEightHoursAgo }
+        }
+      },
+      {
+        $addFields: {
+          trendingScore: {
+            $add: [
+              { $multiply: [{ $size: { $ifNull: ["$likes", []] } }, 5] },
+              { $ifNull: ["$views", 0] }
+            ]
+          }
+        }
+      },
+      { $sort: { trendingScore: -1, createdAt: -1 } },
+      { $limit: 10 }
+    ]);
+
+    // Fallback: If no recent trending, show top overall based on same score
+    if (trendingPhotos.length === 0) {
+      const topOverall = await Photo.aggregate([
+        { $match: { status: 'approved' } },
+        {
+          $addFields: {
+            trendingScore: {
+              $add: [
+                { $multiply: [{ $size: { $ifNull: ["$likes", []] } }, 5] },
+                { $ifNull: ["$views", 0] }
+              ]
+            }
+          }
+        },
+        { $sort: { trendingScore: -1 } },
+        { $limit: 10 }
+      ]);
+      return res.json(topOverall);
+    }
+
+    res.json(trendingPhotos);
+  } catch (err) {
+    console.error("Trending Error:", err);
+    res.status(500).json({ error: "Failed to fetch trending photos" });
+  }
+});
+
 // Get server IP address
 function getServerIP() {
   const interfaces = os.networkInterfaces();
@@ -106,10 +160,12 @@ router.post("/", auth, upload.array("photos", 10), async (req, res) => {
   }
 });
 
-// GET all photos (all statuses, app will handle display logic)
+// GET all photos (supports filtering by status)
 router.get("/", async (req, res) => {
   try {
-    const photos = await Photo.find().sort({ createdAt: -1 });
+    const { status } = req.query;
+    const query = status ? { status } : {};
+    const photos = await Photo.find(query).sort({ createdAt: -1 }).lean();
     res.json(photos);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -156,6 +212,8 @@ router.patch("/reject/:id", auth, async (req, res) => {
     res.status(500).json({ message: "Failed to reject photo" });
   }
 });
+
+
 
 // DELETE a photo
 router.delete("/:id", auth, async (req, res) => {
@@ -221,19 +279,28 @@ router.delete("/folder/:name", auth, async (req, res) => {
   }
 });
 
-// Increment view count
-router.patch("/:id/view", async (req, res) => {
+// Increment view count (Now unique per user)
+router.patch("/:id/view", auth, async (req, res) => {
   try {
-    const photo = await Photo.findByIdAndUpdate(
-      req.params.id,
-      { $inc: { views: 1 } },
-      { new: true }
-    );
+    const photo = await Photo.findById(req.params.id);
     if (!photo) {
       return res.status(404).json({ error: "Photo not found" });
     }
+
+    // Initialize viewedBy if it doesn't exist
+    if (!photo.viewedBy) photo.viewedBy = [];
+
+    // Add user ID to unique set
+    const userId = req.user.id;
+    if (!photo.viewedBy.includes(userId)) {
+      photo.viewedBy.push(userId);
+      photo.views = photo.viewedBy.length;
+      await photo.save();
+    }
+
     res.json({ views: photo.views });
   } catch (err) {
+    console.error("View update error:", err);
     res.status(500).json({ error: "Failed to update views" });
   }
 });

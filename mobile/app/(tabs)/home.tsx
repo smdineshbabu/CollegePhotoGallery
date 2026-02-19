@@ -13,10 +13,12 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
+  Platform,
+  useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
-import { useState, useEffect, useCallback, memo, useRef } from "react";
+import { useState, useEffect, useCallback, memo, useRef, useMemo } from "react";
 import { useRouter, useFocusEffect, usePathname } from "expo-router";
 import { useIsFocused } from "@react-navigation/native";
 import api from "../../services/api";
@@ -35,7 +37,15 @@ import Animated, {
   useAnimatedStyle,
   interpolate,
   Extrapolate,
-  LinearTransition
+  LinearTransition,
+  withRepeat,
+  withTiming,
+  withSequence,
+  Easing,
+  withSpring,
+  useDerivedValue,
+  useAnimatedSensor,
+  SensorType,
 } from "react-native-reanimated";
 
 const { width, height } = Dimensions.get("window");
@@ -44,6 +54,245 @@ const LOGO_PHOTO = "https://img.icons8.com/fluency/96/camera.png";
 const POST_STORY_ICON = "https://img.icons8.com/fluency/96/add-camera.png";
 const ALL_PHOTOS_ICON = "https://img.icons8.com/fluency/96/stack-of-photos.png";
 const FALLBACK_IMAGE = "https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=800";
+
+const getCircleConfig = (width: number, height: number) => {
+  const configs = [];
+  const colors = ['#FF3B30', '#FF9500', '#FFCC00', '#4CD964', '#5AC8FA', '#007AFF', '#5856D6', '#AF52DE', '#FF2D55'];
+  for (let i = 0; i < 35; i++) {
+    configs.push({
+      color: colors[i % colors.length],
+      size: 60 + Math.random() * 60,
+      top: Math.random() * height,
+      left: Math.random() * width,
+      phase: Math.random() * Math.PI * 2,
+    });
+  }
+  return configs;
+};
+
+// --- REFINED LIQUID UI COMPONENT ---
+
+const LiquidCircle = memo(({ circle, time, sensorX, sensorY, agitation, width, height }: any) => {
+  const animatedStyle = useAnimatedStyle(() => {
+    // 1. AMBIENT SWAY
+    const swayX = Math.sin(time.value + circle.phase) * 40;
+    const swayY = Math.cos(time.value + circle.phase) * 50;
+
+    // 2. SLOSH (Follow the tilt)
+    const sloshX = sensorX.value * 120; // Increased back for "flowing" feel
+    const sloshY = sensorY.value * 120;
+
+    // 3. SCALE
+    const ambientScale = 1 + Math.sin(time.value + circle.phase) * 0.2;
+    const finalScale = ambientScale * agitation.value;
+
+    // 4. WRAP LOGIC (Crucial for "all bubbles staying visible")
+    // Instead of clamping at edge, we make them "loop" around the edges of the container
+    // This ensures density is always constant.
+    let finalX = swayX + sloshX;
+    let finalY = swayY + sloshY;
+
+    // 4. WRAP LOGIC (Crucial for "all bubbles staying visible")
+    // We use a custom modulo to wrap the absolute position around the viewport.
+    // This makes the liquid appear "infinite" and keep all bubbles on screen.
+    const startX = circle.left || (width - circle.right - circle.size);
+    const startY = circle.top || (height - circle.bottom - circle.size);
+
+    // Calculate final absolute position with wrap-around
+    let absX = (startX + swayX + sloshX + width) % width;
+    let absY = (startY + swayY + sloshY + height) % height;
+
+    return {
+      left: absX,
+      top: absY,
+      transform: [
+        { scale: finalScale }
+      ]
+    };
+  });
+
+  return (
+    <Animated.View
+      style={[
+        {
+          backgroundColor: circle.color,
+          width: circle.size,
+          height: circle.size,
+          borderRadius: circle.size / 2,
+          opacity: 0.6,
+          position: 'absolute',
+        },
+        animatedStyle
+      ]}
+    />
+  );
+});
+
+const LiquidBackground = memo(({ scrollY }: any) => {
+  const { width, height } = useWindowDimensions();
+  const time = useSharedValue(0);
+  const circleConfig = useMemo(() => getCircleConfig(width, height), [width, height]);
+
+  // GRAVITY SENSOR (Best for "water in a can" tilt physics)
+  const sensor = useAnimatedSensor(SensorType.GRAVITY, { interval: 16 });
+
+  // SMOOTH SENSOR DATA (Derive once for all children to save CPU)
+  const sensorX = useDerivedValue(() => withSpring(sensor.sensor.value.x, { damping: 20, stiffness: 100 }));
+  const sensorY = useDerivedValue(() => withSpring(sensor.sensor.value.y, { damping: 20, stiffness: 100 }));
+
+  const agitation = useDerivedValue(() => {
+    const totalMove = Math.abs(sensor.sensor.value.x) + Math.abs(sensor.sensor.value.y);
+    return withSpring(
+      interpolate(totalMove, [0, 15], [1, 1.4], Extrapolate.CLAMP),
+      { damping: 10, stiffness: 60 }
+    );
+  });
+
+  useEffect(() => {
+    time.value = withRepeat(
+      withTiming(2 * Math.PI, { duration: 5000, easing: Easing.linear }), // Restored original 5s speed
+      -1,
+      false
+    );
+  }, []);
+
+  // Smoothing the scroll parallax
+  const smoothScrollY = useDerivedValue(() => {
+    return withSpring(scrollY.value, { damping: 20, stiffness: 120 });
+  });
+
+  const parallax = useAnimatedStyle(() => ({
+    transform: [{ translateY: -(smoothScrollY.value * 0.1) }]
+  }));
+
+  return (
+    <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, parallax]}>
+      {circleConfig.map((circle, i) => (
+        <LiquidCircle
+          key={i}
+          circle={circle}
+          time={time}
+          sensorX={sensorX}
+          sensorY={sensorY}
+          agitation={agitation}
+          width={width}
+          height={height}
+        />
+      ))}
+      <BlurView intensity={25} style={StyleSheet.absoluteFill} tint="light" />
+    </Animated.View>
+  );
+});
+
+const TrendingNewsCard = memo(({ item, index, onPress }: any) => {
+  const isViral = (item.likes?.length || 0) > 5 || (item.views || 0) > 20;
+
+  // High-Visual: Breathing Animation for cards
+  const scale = useSharedValue(1);
+  const glowOpacity = useSharedValue(0.3);
+
+  useEffect(() => {
+    scale.value = withRepeat(
+      withSequence(
+        withTiming(1.02, { duration: 2500, easing: Easing.bezier(0.4, 0, 0.2, 1) }),
+        withTiming(1, { duration: 2500, easing: Easing.bezier(0.4, 0, 0.2, 1) })
+      ),
+      -1,
+      false
+    );
+    if (isViral) {
+      glowOpacity.value = withRepeat(
+        withSequence(
+          withTiming(0.6, { duration: 1500, easing: Easing.inOut(Easing.quad) }),
+          withTiming(0.3, { duration: 1500, easing: Easing.inOut(Easing.quad) })
+        ),
+        -1,
+        true
+      );
+    }
+  }, [isViral]);
+
+  const animatedCardStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+    shadowOpacity: interpolate(scale.value, [1, 1.02], [0.2, 0.4])
+  }));
+
+  const glowStyle = useAnimatedStyle(() => ({
+    opacity: isViral ? glowOpacity.value : 0,
+    transform: [{ scale: 1.1 }]
+  }));
+
+  return (
+    <Animated.View style={[styles.trendingNewsCardContainer, animatedCardStyle]}>
+      {/* Dynamic Glow Aura for Viral Items */}
+      {isViral && (
+        <Animated.View style={[styles.viralGlow, glowStyle]}>
+          <LinearGradient
+            colors={["rgba(255,59,48,0.5)", "transparent"]}
+            style={StyleSheet.absoluteFill}
+          />
+        </Animated.View>
+      )}
+
+      <TouchableOpacity
+        style={styles.trendingNewsCard}
+        onPress={() => onPress(index)}
+        activeOpacity={0.9}
+      >
+        <Image
+          source={{ uri: item.thumbnailUrl || item.imageUrl }}
+          style={styles.trendingNewsImage}
+          contentFit="cover"
+          transition={500}
+        />
+
+        <LinearGradient
+          colors={["rgba(0,0,0,0.1)", "rgba(0,0,0,0.4)", "rgba(0,0,0,0.98)"]}
+          style={styles.trendingNewsOverlay}
+          locations={[0, 0.5, 0.95]}
+        >
+          <View style={styles.trendingBadgeRow}>
+            <View style={[styles.newsBadge, isViral ? styles.viralBadge : styles.trendingBadge]}>
+              <Text style={styles.newsBadgeText}>{isViral ? "🔥 VIRAL" : "⚡ TRENDING"}</Text>
+            </View>
+          </View>
+
+          <View style={styles.trendingNewsContent}>
+            <Text style={styles.trendingNewsHeadline} numberOfLines={2}>
+              {item.title}
+            </Text>
+
+            <View style={styles.trendingMetaRow}>
+              <View style={styles.newsStatItem}>
+                <LinearGradient
+                  colors={["#007AFF", "#00C6FF"]}
+                  style={styles.newsStatIconBg}
+                >
+                  <Ionicons name="eye" size={10} color="#fff" />
+                </LinearGradient>
+                <Text style={styles.newsStatValue}>{item.views || 0}</Text>
+                <Text style={styles.newsStatLabel}>VIEWS</Text>
+              </View>
+
+              <View style={styles.newsStatDivider} />
+
+              <View style={styles.newsStatItem}>
+                <LinearGradient
+                  colors={["#FF3B30", "#FF2D55"]}
+                  style={styles.newsStatIconBg}
+                >
+                  <Ionicons name="heart" size={10} color="#fff" />
+                </LinearGradient>
+                <Text style={styles.newsStatValue}>{item.likes?.length || 0}</Text>
+                <Text style={styles.newsStatLabel}>LIKES</Text>
+              </View>
+            </View>
+          </View>
+        </LinearGradient>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+});
 
 const ParallaxItem = memo(({ item, index, scrollX, onPress }: any) => {
   const animatedStyle = useAnimatedStyle(() => {
@@ -76,7 +325,7 @@ const ParallaxItem = memo(({ item, index, scrollX, onPress }: any) => {
             headers: { "bypass-tunnel-reminder": "true" }
           }}
           style={styles.parallaxImage}
-          transition={300}
+          contentFit="cover"
         />
       </Animated.View>
       <LinearGradient colors={["transparent", "rgba(0,0,0,0.8)"]} style={styles.itemOverlay}>
@@ -97,6 +346,7 @@ const ParallaxItem = memo(({ item, index, scrollX, onPress }: any) => {
 export default function HomeScreen() {
   const router = useRouter();
   const [recentPhotos, setRecentPhotos] = useState<any[]>([]);
+  const [trendingPhotos, setTrendingPhotos] = useState<any[]>([]);
   const [stats, setStats] = useState({ total: 0, folders: 0 });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -169,6 +419,13 @@ export default function HomeScreen() {
   };
 
   const scrollX = useSharedValue(0);
+  const scrollY = useSharedValue(0);
+
+  const mainScrollHandler = useAnimatedScrollHandler({
+    onScroll: (event) => {
+      scrollY.value = event.contentOffset.y;
+    }
+  });
 
   const incrementView = async (id: string) => {
     if (!id || sessionViewedIds.current.has(id)) return;
@@ -265,8 +522,7 @@ export default function HomeScreen() {
       if (showLoading) setLoading(true);
 
       await fetchUserData();
-      const urlToFetch = "/upload";
-      // console.log("[HOME] Fetching from:", urlToFetch);
+      const urlToFetch = "/upload?status=approved";
       const response = await api.get(urlToFetch);
       // console.log("[HOME] API Response:", response.data.length, "photos");
 
@@ -305,9 +561,6 @@ export default function HomeScreen() {
       });
 
       const validPhotos = standardizedPhotos.filter((p: any) => {
-        // ONLY show approved photos on Home screen
-        if (p.status !== 'approved') return false;
-
         const folder = (p.folder || "").toLowerCase();
         const title = (p.title || "").toLowerCase();
         // Skip anything related to recovered/restored
@@ -345,6 +598,38 @@ export default function HomeScreen() {
     }
   };
 
+  const fetchTrendingPhotos = async () => {
+    try {
+      const response = await api.get("/upload/trending");
+
+      const storedUrl = await authStorage.getServerUrl();
+      let baseRaw = (storedUrl || api.defaults.baseURL || "http://10.73.154.112:5000/api");
+      if (!baseRaw.startsWith("http")) baseRaw = "http://" + baseRaw;
+      const baseApiUrl = baseRaw.replace("/api", "").replace(/\/$/, "");
+
+      const standardized = response.data.map((p: any) => {
+        const fixUrl = (url: string) => {
+          if (!url) return null;
+          if (url.startsWith("/uploads")) return `${baseApiUrl}${url}`;
+          if (url.startsWith("http")) {
+            const parts = url.split("/uploads/");
+            if (parts.length > 1) return `${baseApiUrl}/uploads/${parts[1]}`;
+          }
+          return url;
+        };
+        return {
+          ...p,
+          imageUrl: fixUrl(p.imageUrl) || p.imageUrl,
+          thumbnailUrl: fixUrl(p.thumbnailUrl) || p.thumbnailUrl || fixUrl(p.imageUrl),
+        };
+      });
+
+      setTrendingPhotos(standardized);
+    } catch (err) {
+      console.error("[HOME] Trending fetch failed:", err);
+    }
+  };
+
   // Live Updates: Auto-refresh every 5 seconds when focused
   useFocusEffect(
     useCallback(() => {
@@ -353,11 +638,12 @@ export default function HomeScreen() {
       const loadData = async () => {
         if (!isActive) return;
         await fetchRecentPhotos(false); // Pass false to suppress full loading state
+        await fetchTrendingPhotos();
       };
 
       loadData(); // Initial load
 
-      const interval = setInterval(loadData, 5000);
+      const interval = setInterval(loadData, 30000); // Refresh every 30 seconds
 
       return () => {
         isActive = false;
@@ -386,10 +672,11 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#fff" />
+      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+      <LiquidBackground scrollY={scrollY} />
       <LinearGradient
         colors={["#007AFF", "#00C6FF"]}
-        style={styles.header}
+        style={[styles.header, { paddingTop: insets.top }]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 0 }}
       >
@@ -411,7 +698,9 @@ export default function HomeScreen() {
         </View>
       </LinearGradient>
 
-      <ScrollView
+      <Animated.ScrollView
+        onScroll={mainScrollHandler}
+        scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 100 }}
         refreshControl={
@@ -488,6 +777,49 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* Trending Today - News Style */}
+        {trendingPhotos.length > 0 && (
+          <View style={styles.trendingSection}>
+            <View style={styles.trendingTickerHeader}>
+              <LinearGradient
+                colors={["#FF3B30", "#FF9500"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.tickerBadge}
+              >
+                <Text style={styles.tickerBadgeText}>NEWS</Text>
+              </LinearGradient>
+              <View style={styles.tickerContent}>
+                <Text style={styles.tickerText}>Trending Today • High Engagement Memories</Text>
+              </View>
+            </View>
+
+            <FlatList
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              data={trendingPhotos}
+              keyExtractor={(item) => `trending-${item._id}`}
+              contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 10 }}
+              removeClippedSubviews={Platform.OS === 'android'}
+              initialNumToRender={3}
+              maxToRenderPerBatch={5}
+              windowSize={3}
+              renderItem={({ item, index }) => (
+                <TrendingNewsCard
+                  item={item}
+                  index={index}
+                  onPress={(idx: number) => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    setRecentPhotos(trendingPhotos);
+                    setViewerIndex(idx);
+                    setViewerOpen(true);
+                  }}
+                />
+              )}
+            />
+          </View>
+        )}
+
         {/* Recent Highlights */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
@@ -510,6 +842,10 @@ export default function HomeScreen() {
               data={recentPhotos.slice(0, 10)}
               keyExtractor={(item) => item._id}
               contentContainerStyle={{ paddingHorizontal: 20 }}
+              removeClippedSubviews={Platform.OS === 'android'}
+              initialNumToRender={3}
+              maxToRenderPerBatch={5}
+              windowSize={3}
               renderItem={({ item, index }) => (
                 <ParallaxItem
                   item={item}
@@ -548,7 +884,7 @@ export default function HomeScreen() {
                   style={styles.categoryCard}
                   onPress={() => {
                     // Use string path for more reliable tab navigation with params
-                    router.push(`/(tabs)/gallery?folder=${encodeURIComponent(cat.name)}`);
+                    router.push(`/(tabs)/gallery?folder=${encodeURIComponent(cat.name)}&source=explore`);
                   }}
                   activeOpacity={0.8}
                 >
@@ -608,7 +944,7 @@ export default function HomeScreen() {
             </View>
           </TouchableOpacity>
         </View>
-      </ScrollView>
+      </Animated.ScrollView>
 
       {/* Premium Photo Viewer */}
       {/* Premium Photo Viewer */}
@@ -693,7 +1029,7 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#F5F7FA",
+    backgroundColor: "transparent",
   },
   header: {
     paddingHorizontal: 25,
@@ -1167,5 +1503,168 @@ const styles = StyleSheet.create({
   cancelButtonText: {
     color: "#666",
     fontSize: 16,
+  },
+  // News Style Trending Styles
+  trendingSection: {
+    marginTop: 35,
+    marginBottom: 20,
+  },
+  trendingTickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    marginHorizontal: 20,
+    borderRadius: 20,
+    padding: 3,
+    marginBottom: 20,
+    borderWidth: 1.5,
+    borderColor: '#F0F0F0',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.1,
+    shadowRadius: 15,
+    elevation: 8,
+  },
+  tickerBadge: {
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 16,
+    shadowColor: '#FF3B30',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  tickerBadgeText: {
+    color: '#fff',
+    fontWeight: '900',
+    fontSize: 14,
+    fontStyle: 'italic',
+    letterSpacing: 1,
+  },
+  tickerContent: {
+    flex: 1,
+    paddingHorizontal: 15,
+  },
+  tickerText: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#1A1A1A',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  trendingNewsCardContainer: {
+    width: 300,
+    height: 200,
+    marginRight: 25,
+    marginLeft: 5, // Extra space for glow
+    marginBottom: 15,
+  },
+  viralGlow: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 30,
+    zIndex: -1,
+    backgroundColor: '#FF3B3010',
+  },
+  trendingNewsCard: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 25,
+    overflow: 'hidden',
+    backgroundColor: '#111',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.4,
+    shadowRadius: 20,
+    elevation: 15,
+  },
+  trendingNewsImage: {
+    width: '100%',
+    height: '100%',
+    opacity: 0.9,
+  },
+  trendingNewsOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    padding: 20,
+    justifyContent: 'space-between',
+  },
+  trendingBadgeRow: {
+    flexDirection: 'row',
+  },
+  newsBadgeBlur: {
+    borderRadius: 12,
+    overflow: 'hidden',
+    padding: 1,
+  },
+  newsBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 10,
+  },
+  trendingBadge: {
+    backgroundColor: 'rgba(255,149,0,0.85)',
+  },
+  viralBadge: {
+    backgroundColor: 'rgba(255,59,48,0.85)',
+  },
+  newsBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  trendingNewsContent: {
+    width: '100%',
+  },
+  trendingNewsHeadline: {
+    color: '#fff',
+    fontSize: 22,
+    fontWeight: '900',
+    lineHeight: 26,
+    textShadowColor: 'rgba(0,0,0,0.8)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
+    letterSpacing: -0.5,
+  },
+  trendingMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  newsStatItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+  newsStatIconBg: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 6,
+  },
+  newsStatValue: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '900',
+    marginRight: 4,
+  },
+  newsStatLabel: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  newsStatDivider: {
+    width: 1,
+    height: 12,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    marginHorizontal: 12,
   },
 });

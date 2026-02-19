@@ -59,6 +59,17 @@ export default function TabLayout() {
             />
           )
         }}
+        listeners={({ navigation }) => ({
+          tabPress: (e) => {
+            // Explicitly navigate to the gallery with NO folder param
+            // and a timestamp to force a reset event.
+            navigation.navigate("gallery", {
+              folder: undefined,
+              source: "tab",
+              t: Date.now()
+            });
+          },
+        })}
       />
       <Tabs.Screen
         name="upload"

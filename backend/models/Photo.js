@@ -32,8 +32,16 @@ const photoSchema = new mongoose.Schema({
     type: [mongoose.Schema.Types.ObjectId],
     ref: 'User',
     default: []
+  },
+  viewedBy: {
+    type: [mongoose.Schema.Types.ObjectId],
+    ref: 'User',
+    default: []
   }
 }, { timestamps: true });
 
+photoSchema.index({ status: 1, createdAt: -1 });
+photoSchema.index({ views: -1 });
+photoSchema.index({ folder: 1 });
 
 export default mongoose.model("Photo", photoSchema);

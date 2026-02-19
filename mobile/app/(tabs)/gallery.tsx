@@ -210,10 +210,26 @@ export default function GalleryScreen() {
     }
   };
 
+  // Consolidated Navigation Logic: Reset vs Deep Link
+  // Using useEffect on params to handle both initial load and subsequent navigation events
+  useEffect(() => {
+    if (folder) {
+      const decodedFolder = decodeURIComponent(folder as string);
+      console.log("[GALLERY] Folder param changed:", decodedFolder);
+      setSelectedFolder(decodedFolder);
+      setViewMode("photos");
+      cameFromHome.current = true;
+    } else {
+      // Standard tab tap or reset -> Show folders list
+      console.log("[GALLERY] Resetting to folders list (No folder param)");
+      setViewMode("folders");
+      setSelectedFolder(null);
+      cameFromHome.current = false;
+    }
+  }, [folder, useLocalSearchParams().t]); // Re-run if folder or reset-timestamp changes
+
   useFocusEffect(
     useCallback(() => {
-      let isActive = true;
-
       const loadMyUploads = async () => {
         try {
           const stored = await AsyncStorage.getItem("my_uploads");
@@ -229,33 +245,21 @@ export default function GalleryScreen() {
         }
       };
 
-      // Simplify initial load logic
       const loadInitialData = async () => {
-        await loadMyUploads(); // RESTORED: Critical for filtering!
+        // Just fetch data on focus, reset logic is now in useEffect
+        await loadMyUploads();
         await fetchPhotos(isInitialFocus.current);
         isInitialFocus.current = false;
       };
       loadInitialData();
+
+      return () => {
+        // No-op cleanup
+      };
     }, [])
   );
 
-  // Consolidated Param Handling - SOURCE OF TRUTH
-  useEffect(() => {
-    if (folder) {
-      const decodedFolder = decodeURIComponent(folder as string);
-      console.log("[GALLERY] Setting folder from param:", decodedFolder);
-      setSelectedFolder(decodedFolder);
-      setViewMode("photos");
-      cameFromHome.current = true;
-    } else {
-      // If no param, ensure we are in folder mode (unless we are just navigating back from a photo)
-      // We only reset if we are NOT already in a folder state initiated by the user within the tab
-      // But to fix the "stuck" issue, we entering the tab without params should probably reset
-      if (!cameFromHome.current && !selectedFolder) {
-        setViewMode("folders");
-      }
-    }
-  }, [folder]);
+
 
   // Cleanup params on unmount/blur is handled by the router automatically in some cases,
   // but let's ensure we don't have lingering params when switching tabs significantly.
@@ -480,8 +484,6 @@ export default function GalleryScreen() {
 
       return () => {
         backHandler.remove();
-        // Aggressively clear params when leaving context
-        router.setParams({ folder: undefined, openMyUploads: undefined });
       };
     }, [viewMode])
   );
