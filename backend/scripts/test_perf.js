@@ -4,7 +4,6 @@ async function testPerformance() {
     const BASE_URL = 'http://localhost:5000/api';
 
     const routes = [
-        { name: 'Analytics', path: '/analytics' },
         { name: 'Home Feed (Approved)', path: '/upload?status=approved' },
         { name: 'All Photos', path: '/upload' },
     ];

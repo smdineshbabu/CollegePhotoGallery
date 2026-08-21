@@ -17,13 +17,7 @@ import {
     BarChart2,
     Eye,
     Heart,
-    PieChart as PieChartIcon,
-    TrendingUp
 } from 'lucide-react';
-import {
-    BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-    PieChart, Pie, Cell, Legend
-} from 'recharts';
 
 const API_BASE = '/api';
 
@@ -43,7 +37,6 @@ function App() {
     const [selectedPhoto, setSelectedPhoto] = useState(null);
     const [modalConfig, setModalConfig] = useState(null);
     const [modalInput, setModalInput] = useState('');
-    const [analytics, setAnalytics] = useState(null);
 
     useEffect(() => {
         fetchData();
@@ -62,18 +55,10 @@ function App() {
             setRequests(requestsRes.data);
         } catch (err) {
             console.error('Core fetch error:', err);
-        }
-
-        // Fetch Analytics independently
-        try {
-            const analyticsRes = await axios.get(`${API_BASE}/analytics`);
-            setAnalytics(analyticsRes.data);
-        } catch (err) {
-            console.error('Analytics fetch error:', err);
-            setAnalytics('error'); // Marker for error state
         } finally {
             setLoading(false);
         }
+
     };
 
     const handleApprove = async (id) => {
@@ -119,6 +104,36 @@ function App() {
                     setModalConfig(null);
                 } catch (err) {
                     alert('Failed to resolve request');
+                }
+            }
+        });
+    };
+
+    const handleAdminDeletePhoto = (photoId, requestId) => {
+        setModalConfig({
+            title: 'Fulfill Deletion Request?',
+            message: 'Are you sure you want to delete this photo and resolve the user request? This is permanent.',
+            type: 'confirm',
+            onConfirm: async () => {
+                try {
+                    // 1. Delete the photo
+                    await axios.delete(`${API_BASE}/upload/${photoId}`);
+                    
+                    // 2. Resolve the request
+                    await axios.patch(`${API_BASE}/requests/${requestId}`, {
+                        adminResponse: "Photo has been deleted as requested.",
+                        status: 'resolved'
+                    });
+
+                    // 3. Update local state
+                    setPhotos(prev => prev.filter(p => p._id !== photoId));
+                    setRequests(prev => prev.map(r => r._id === requestId ? { ...r, status: 'resolved', adminResponse: "Resolved" } : r));
+                    
+                    setModalConfig(null);
+                    setTimeout(() => alert('Photo deleted and request resolved!'), 300);
+                } catch (err) {
+                    console.error('Delete fulfillment error:', err);
+                    alert('Failed to fulfill deletion request');
                 }
             }
         });
@@ -189,12 +204,6 @@ function App() {
                     >
                         <CheckCircle size={20} color="white" /> Approved
                     </div>
-                    <div
-                        className={`nav-item ${activeTab === 'analytics' ? 'active' : ''}`}
-                        onClick={() => setActiveTab('analytics')}
-                    >
-                        <BarChart2 size={20} color="white" /> Analytics
-                    </div>
                 </nav>
 
                 <div style={{ marginTop: 'auto' }}>
@@ -217,20 +226,6 @@ function App() {
                                 <h1>Welcome Back, Admin</h1>
                                 <p className="muted">Here's what's happening in the gallery today.</p>
 
-                                <div className="stats-grid" style={{ marginTop: '2.5rem' }}>
-                                    <div className="stat-card">
-                                        <p className="muted">Pending Photos</p>
-                                        <div style={{ fontSize: '2rem', fontWeight: 800 }}>{pendingPhotos.length}</div>
-                                    </div>
-                                    <div className="stat-card">
-                                        <p className="muted">Total Photos</p>
-                                        <div style={{ fontSize: '2rem', fontWeight: 800 }}>{photos.length}</div>
-                                    </div>
-                                    <div className="stat-card">
-                                        <p className="muted">User Requests</p>
-                                        <div style={{ fontSize: '2rem', fontWeight: 800 }}>{filteredRequests.length}</div>
-                                    </div>
-                                </div>
                             </>
                         )}
 
@@ -314,9 +309,18 @@ function App() {
                                                 <p style={{ fontWeight: 600, marginBottom: '4px' }}>{req.message}</p>
                                                 <p className="muted" style={{ fontSize: '0.85rem' }}>From: {req.user?.name || 'Guest User'}</p>
                                             </div>
-                                            <div className="photo-actions">
+                                            <div className="photo-actions" style={{ flexDirection: 'column' }}>
+                                                {req.type === 'deletion' && req.photo && (
+                                                    <button 
+                                                        className="btn btn-danger" 
+                                                        onClick={() => handleAdminDeletePhoto(req.photo._id, req._id)}
+                                                        style={{ marginBottom: '8px', background: 'rgba(255, 77, 77, 0.2)', border: '1px solid rgba(255, 77, 77, 0.4)' }}
+                                                    >
+                                                        <XCircle size={18} /> Delete Photo & Resolve
+                                                    </button>
+                                                )}
                                                 <button className="btn btn-primary" onClick={() => handleResolveRequest(req._id)}>
-                                                    Reply & Resolve
+                                                    <ChevronRight size={18} /> Reply & Resolve
                                                 </button>
                                             </div>
                                         </div>
@@ -370,118 +374,6 @@ function App() {
                             </>
                         )}
 
-                        {activeTab === 'analytics' && (
-                            <div className="analytics-view">
-                                <div style={{ marginBottom: '2.5rem' }}>
-                                    <h1>Gallery Analytics</h1>
-                                    <p className="muted">Detailed insights into your college memories.</p>
-                                </div>
-
-                                {analytics === 'error' ? (
-                                    <div className="stat-card" style={{ textAlign: 'center', padding: '3rem' }}>
-                                        <XCircle size={48} color="#FF4D4D" style={{ marginBottom: '1rem' }} />
-                                        <h3>Unable to load Analytics</h3>
-                                        <p className="muted">Make sure the backend server is updated and running.</p>
-                                        <button className="btn btn-primary" onClick={fetchData} style={{ marginTop: '1.5rem' }}>
-                                            Try Again
-                                        </button>
-                                    </div>
-                                ) : !analytics ? (
-                                    <div style={{ display: 'flex', justifyContent: 'center', padding: '3rem' }}>
-                                        <Loader2 className="animate-spin" size={32} color="#007AFF" />
-                                    </div>
-                                ) : (
-                                    <>
-                                        <div className="stats-grid">
-                                            <div className="stat-card">
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-                                                    <TrendingUp size={20} color="#007AFF" />
-                                                    <p className="muted">Total Engagement</p>
-                                                </div>
-                                                <div style={{ fontSize: '2rem', fontWeight: 800 }}>{analytics.summary.totalViews}</div>
-                                                <p style={{ fontSize: '0.85rem', color: '#00D094', fontWeight: 600 }}>Total Views Across Gallery</p>
-                                            </div>
-                                            <div className="stat-card">
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-                                                    <ImageIcon size={20} color="#00D094" />
-                                                    <p className="muted">Library Size</p>
-                                                </div>
-                                                <div style={{ fontSize: '2rem', fontWeight: 800 }}>{analytics.summary.totalPhotos}</div>
-                                                <p style={{ fontSize: '0.85rem', color: '#64748B', fontWeight: 600 }}>Total Photos Uploaded</p>
-                                            </div>
-                                        </div>
-
-                                        <div className="charts-grid">
-                                            <div className="chart-card">
-                                                <h3>Views by Folder</h3>
-                                                <div style={{ width: '100%', height: 300 }}>
-                                                    <ResponsiveContainer>
-                                                        <BarChart data={analytics.viewsByFolder}>
-                                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                                                            <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#64748B', fontSize: 12 }} />
-                                                            <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748B', fontSize: 12 }} />
-                                                            <Tooltip
-                                                                contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 30px rgba(0,0,0,0.1)', background: 'white' }}
-                                                            />
-                                                            <Bar dataKey="views" fill="#007AFF" radius={[4, 4, 0, 0]} barSize={40} />
-                                                        </BarChart>
-                                                    </ResponsiveContainer>
-                                                </div>
-                                            </div>
-
-                                            <div className="chart-card">
-                                                <h3>Content Status</h3>
-                                                <div style={{ width: '100%', height: 300 }}>
-                                                    <ResponsiveContainer>
-                                                        <PieChart>
-                                                            <Pie
-                                                                data={analytics.statusDistribution}
-                                                                innerRadius={60}
-                                                                outerRadius={100}
-                                                                paddingAngle={5}
-                                                                dataKey="value"
-                                                            >
-                                                                {analytics.statusDistribution.map((entry, index) => (
-                                                                    <Cell
-                                                                        key={`cell-${index}`}
-                                                                        fill={
-                                                                            entry.name === 'approved' ? '#00D094' :
-                                                                                entry.name === 'pending' ? '#FF9F1C' : '#FF4D4D'
-                                                                        }
-                                                                    />
-                                                                ))}
-                                                            </Pie>
-                                                            <Tooltip />
-                                                            <Legend verticalAlign="bottom" height={36} />
-                                                        </PieChart>
-                                                    </ResponsiveContainer>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div className="top-photos-section" style={{ marginTop: '3rem' }}>
-                                            <h3>Top 5 Most Viewed Photos</h3>
-                                            <div className="top-photos-list">
-                                                {analytics.topPhotos.map((photo, index) => (
-                                                    <div key={photo._id} className="top-photo-item">
-                                                        <span className="rank-number">#{index + 1}</span>
-                                                        <img src={getImgUrl(photo.imageUrl)} alt="" className="top-photo-thumb" />
-                                                        <div style={{ flex: 1 }}>
-                                                            <div style={{ fontWeight: 700 }}>{photo.title}</div>
-                                                            <div className="muted" style={{ fontSize: '0.85rem' }}>{photo.folder}</div>
-                                                        </div>
-                                                        <div style={{ textAlign: 'right' }}>
-                                                            <div style={{ fontWeight: 800, color: '#007AFF' }}>{photo.views}</div>
-                                                            <div className="muted" style={{ fontSize: '0.75rem' }}>Views</div>
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    </>
-                                )}
-                            </div>
-                        )}
                     </div>
                 )}
             </main>

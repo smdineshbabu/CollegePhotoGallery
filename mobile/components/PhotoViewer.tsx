@@ -67,7 +67,33 @@ interface PhotoViewerProps {
     onSwipe?: (index: number) => void;
     currentUser?: any;
     onLikeToggle?: (id: string, isLiked: boolean, likesCount: number) => void;
+    onRename?: (id: string, newTitle: string) => Promise<void>;
+    onDelete?: (id: string) => Promise<void>;
 }
+
+const PhotoPage = React.memo(({ item, onMainTap, animatedFlashStyle }: { item: Photo, onMainTap: (id: string) => void, animatedFlashStyle: any }) => (
+    <View style={styles.page}>
+        <ScrollView
+            style={StyleSheet.absoluteFill}
+            contentContainerStyle={styles.zoomContent}
+            maximumZoomScale={4}
+            minimumZoomScale={1}
+            centerContent
+            showsHorizontalScrollIndicator={false}
+            showsVerticalScrollIndicator={false}
+            bouncesZoom
+        >
+            <Image
+                source={{ uri: item.imageUrl, headers: { "bypass-tunnel-reminder": "true" } }}
+                style={styles.image}
+                contentFit="contain"
+                cachePolicy="memory-disk"
+            />
+        </ScrollView>
+        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => onMainTap(item._id)} />
+        <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: '#fff' }, animatedFlashStyle]} pointerEvents="none" />
+    </View>
+));
 
 // ─── Component ───────────────────────────────────────────────────────
 
@@ -79,6 +105,8 @@ export default function PhotoViewer({
     onSwipe,
     currentUser,
     onLikeToggle,
+    onRename,
+    onDelete,
 }: PhotoViewerProps) {
     const insets = useSafeAreaInsets();
     const listRef = useRef<FlatList>(null);
@@ -268,6 +296,51 @@ export default function PhotoViewer({
         finally { setBusy(false); }
     };
 
+    const handleRename = async () => {
+        if (!requestMessage.trim()) { Alert.alert("Error", "Please enter a new title."); return; }
+        try {
+            setBusy(true);
+            if (onRename) {
+                await onRename(photo?._id!, requestMessage.trim());
+                setRequestModalVisible(false);
+                setRequestMessage("");
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            }
+        } catch (err) {
+            Alert.alert("Error", "Failed to rename photo.");
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const handleDelete = async () => {
+        Alert.alert(
+            "Confirm Delete",
+            "Are you sure you want to delete this memory?",
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Delete",
+                    style: "destructive",
+                    onPress: async () => {
+                        try {
+                            setBusy(true);
+                            if (onDelete) {
+                                await onDelete(photo?._id!);
+                                onClose(); // Close viewer after deletion
+                                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                            }
+                        } catch (err) {
+                            Alert.alert("Error", "Failed to delete photo.");
+                        } finally {
+                            setBusy(false);
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
     // Manual double-tap detector using refs
     const tapCountRef = useRef(0);
     const tapTimerRef = useRef<any>(null);
@@ -305,18 +378,13 @@ export default function PhotoViewer({
         }
     }, [idx, photos.length, onSwipe]);
 
-    const renderPage = useCallback(({ item }: { item: Photo }) => (
-        <View style={styles.page}>
-            <ScrollView style={StyleSheet.absoluteFill} contentContainerStyle={styles.zoomContent} maximumZoomScale={4} minimumZoomScale={1} centerContent showsHorizontalScrollIndicator={false} showsVerticalScrollIndicator={false} bouncesZoom>
-                <Image source={{ uri: item.imageUrl, headers: { "bypass-tunnel-reminder": "true" } }} style={styles.image} contentFit="contain" transition={250} />
-            </ScrollView>
-            <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => onMainTap(item._id)} />
-            <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: '#fff' }, animatedFlashStyle]} pointerEvents="none" />
-            {particleDots.map((d, i) => (<Animated.View key={i} style={[styles.particleDotBase, d.style]} pointerEvents="none"><View style={[styles.particleDot, { backgroundColor: d.color, width: d.size, height: d.size, borderRadius: d.size / 2 }]} /></Animated.View>))}
-            {miniHearts.map((h, i) => (<Animated.View key={i} style={[styles.miniHeartBase, h.style]} pointerEvents="none"><Ionicons name="heart" size={h.size} color={h.color} /></Animated.View>))}
-            <Animated.View style={[styles.heartPopContainer, animatedHeartStyle]} pointerEvents="none"><Ionicons name="heart" size={80} color="#FF3B30" /></Animated.View>
-        </View>
-    ), [onMainTap, animatedFlashStyle, particleDots, miniHearts, animatedHeartStyle]);
+    const renderItem = useCallback(({ item }: { item: Photo }) => (
+        <PhotoPage
+            item={item}
+            onMainTap={onMainTap}
+            animatedFlashStyle={animatedFlashStyle}
+        />
+    ), [onMainTap, animatedFlashStyle]);
 
     if (!visible || photos.length === 0) return null;
 
@@ -324,7 +392,35 @@ export default function PhotoViewer({
         <Modal visible={visible} animationType="fade" transparent={false} onRequestClose={onClose} statusBarTranslucent>
             <View style={styles.root}>
                 <StatusBar hidden />
-                <FlatList ref={listRef} data={photos} horizontal pagingEnabled showsHorizontalScrollIndicator={false} initialScrollIndex={startIndex} getItemLayout={(_, i) => ({ length: SCREEN_W, offset: SCREEN_W * i, index: i })} onMomentumScrollEnd={onScroll} keyExtractor={p => p._id} renderItem={renderPage} windowSize={3} initialNumToRender={1} maxToRenderPerBatch={2} removeClippedSubviews />
+                <FlatList
+                    ref={listRef}
+                    data={photos}
+                    horizontal
+                    pagingEnabled
+                    showsHorizontalScrollIndicator={false}
+                    initialScrollIndex={startIndex}
+                    getItemLayout={(_, i) => ({ length: SCREEN_W, offset: SCREEN_W * i, index: i })}
+                    onScroll={onScroll}
+                    scrollEventThrottle={16}
+                    keyExtractor={p => p._id}
+                    renderItem={renderItem}
+                    windowSize={3}
+                    initialNumToRender={1}
+                    maxToRenderPerBatch={1}
+                    removeClippedSubviews={false}
+                    decelerationRate="fast"
+                    disableIntervalMomentum={true}
+                    snapToInterval={SCREEN_W}
+                    keyboardShouldPersistTaps="always"
+                />
+
+                {/* HEART ANIMATION OVERLAY (Moved to Modal Level for Performance) */}
+                <View style={[StyleSheet.absoluteFill, { zIndex: 100 }]} pointerEvents="none">
+                    {particleDots.map((d, i) => (<Animated.View key={i} style={[styles.particleDotBase, d.style]} pointerEvents="none"><View style={[styles.particleDot, { backgroundColor: d.color, width: d.size, height: d.size, borderRadius: d.size / 2 }]} /></Animated.View>))}
+                    {miniHearts.map((h, i) => (<Animated.View key={i} style={[styles.miniHeartBase, h.style]} pointerEvents="none"><Ionicons name="heart" size={h.size} color={h.color} /></Animated.View>))}
+                    <Animated.View style={[styles.heartPopContainer, animatedHeartStyle]} pointerEvents="none"><Ionicons name="heart" size={80} color="#FF3B30" /></Animated.View>
+                </View>
+
                 {controlsVisible && (
                     <Animated.View entering={FadeInUp.duration(200)} exiting={FadeOutUp.duration(150)} style={[styles.topOverlay, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
                         <LinearGradient colors={["rgba(0,0,0,0.7)", "transparent"]} style={StyleSheet.absoluteFill} pointerEvents="none" />
@@ -360,7 +456,15 @@ export default function PhotoViewer({
                                     <View style={[styles.actionIcon, { backgroundColor: "rgba(0,198,255,0.2)" }]}><Ionicons name="pencil" size={20} color="#00C6FF" /></View>
                                     <Text style={styles.actionLabel}>Rename</Text>
                                 </TouchableOpacity>
-                                <TouchableOpacity onPress={() => { setRequestType('deletion'); setRequestModalVisible(true); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); }} style={styles.actionBtn} hitSlop={8}>
+                                <TouchableOpacity onPress={() => {
+                                    if (onDelete) {
+                                        handleDelete();
+                                    } else {
+                                        setRequestType('deletion');
+                                        setRequestModalVisible(true);
+                                    }
+                                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                                }} style={styles.actionBtn} hitSlop={8}>
                                     <View style={[styles.actionIcon, { backgroundColor: "rgba(255,107,107,0.2)" }]}><Ionicons name="trash" size={20} color="#FF6B6B" /></View>
                                     <Text style={styles.actionLabel}>Delete</Text>
                                 </TouchableOpacity>
@@ -386,7 +490,23 @@ export default function PhotoViewer({
                                     ))}
                                 </View>
                                 <View style={styles.inputContainer}><TextInput style={[styles.centeredInput, { height: 100 }]} placeholder={requestType === 'deletion' ? "Reason for deletion..." : requestType === 'rename' ? "Enter new title..." : "Ask us anything..."} placeholderTextColor="rgba(255,255,255,0.3)" multiline value={requestMessage} onChangeText={setRequestMessage} /></View>
-                                <View style={styles.renameButtonsRow}><TouchableOpacity onPress={() => setRequestModalVisible(false)} style={styles.renameBtnBase}><Text style={styles.renameBtnCancel}>Cancel</Text></TouchableOpacity><TouchableOpacity onPress={submitRequest} style={[styles.renameBtnBase, styles.renameBtnSave]}><Text style={styles.renameSaveText}>Send</Text></TouchableOpacity></View>
+                                <View style={styles.renameButtonsRow}>
+                                    <TouchableOpacity onPress={() => setRequestModalVisible(false)} style={styles.renameBtnBase}>
+                                        <Text style={styles.renameBtnCancel}>Cancel</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        onPress={() => {
+                                            if (requestType === 'rename' && onRename) {
+                                                handleRename();
+                                            } else {
+                                                submitRequest();
+                                            }
+                                        }}
+                                        style={[styles.renameBtnBase, styles.renameBtnSave]}
+                                    >
+                                        <Text style={styles.renameSaveText}>{(requestType === 'rename' && onRename) ? "Save" : "Send"}</Text>
+                                    </TouchableOpacity>
+                                </View>
                             </View>
                         </KeyboardAvoidingView>
                     </View>

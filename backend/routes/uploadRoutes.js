@@ -20,7 +20,7 @@ router.get("/trending", async (req, res) => {
     const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
 
     // Aggregate to calculate a weighted score: (Likes * 5) + Views
-    const trendingPhotos = await Photo.aggregate([
+    let trendingPhotos = await Photo.aggregate([
       {
         $match: {
           status: 'approved',
@@ -38,12 +38,13 @@ router.get("/trending", async (req, res) => {
         }
       },
       { $sort: { trendingScore: -1, createdAt: -1 } },
-      { $limit: 10 }
+      { $limit: 50 }
     ]);
 
-    // Fallback: If no recent trending, show top overall based on same score
-    if (trendingPhotos.length === 0) {
-      const topOverall = await Photo.aggregate([
+    // Fallback logic: If we have fewer than 10 items in the last 48h, 
+    // ignore the time constraint and pull top overall to ensure variety.
+    if (trendingPhotos.length < 10) {
+      trendingPhotos = await Photo.aggregate([
         { $match: { status: 'approved' } },
         {
           $addFields: {
@@ -56,9 +57,8 @@ router.get("/trending", async (req, res) => {
           }
         },
         { $sort: { trendingScore: -1 } },
-        { $limit: 10 }
+        { $limit: 50 }
       ]);
-      return res.json(topOverall);
     }
 
     res.json(trendingPhotos);
@@ -147,7 +147,8 @@ router.post("/", auth, upload.array("photos", 10), async (req, res) => {
         title: photoTitle,
         imageUrl: `/uploads/${file.filename}`,
         thumbnailUrl: thumbnailUrl,
-        folder: folder
+        folder: folder,
+        uploadedBy: req.user.id
       });
       await newPhoto.save();
       savedPhotos.push(newPhoto);
@@ -179,6 +180,16 @@ router.get("/pending", auth, async (req, res) => {
     res.json(photos);
   } catch (err) {
     res.status(500).json({ message: err.message });
+  }
+});
+
+// GET user's own photos
+router.get("/my", auth, async (req, res) => {
+  try {
+    const photos = await Photo.find({ uploadedBy: req.user.id }).sort({ createdAt: -1 });
+    res.json(photos);
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch your uploads" });
   }
 });
 

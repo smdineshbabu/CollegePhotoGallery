@@ -13,8 +13,9 @@ const photoSchema = new mongoose.Schema({
     default: 0,
   },
   uploadedBy: {
-    type: String,
-    default: "Guest"
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: false
   },
   thumbnailUrl: {
     type: String

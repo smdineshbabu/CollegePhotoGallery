@@ -46,9 +46,12 @@ import Animated, {
   useDerivedValue,
   useAnimatedSensor,
   SensorType,
+  cancelAnimation,
 } from "react-native-reanimated";
 
 const { width, height } = Dimensions.get("window");
+
+const SPRING_CONFIG = { damping: 12, stiffness: 200 };
 
 const LOGO_PHOTO = "https://img.icons8.com/fluency/96/camera.png";
 const POST_STORY_ICON = "https://img.icons8.com/fluency/96/add-camera.png";
@@ -57,14 +60,20 @@ const FALLBACK_IMAGE = "https://images.unsplash.com/photo-1523050854058-8df90110
 
 const getCircleConfig = (width: number, height: number) => {
   const configs = [];
-  const colors = ['#FF3B30', '#FF9500', '#FFCC00', '#4CD964', '#5AC8FA', '#007AFF', '#5856D6', '#AF52DE', '#FF2D55'];
-  for (let i = 0; i < 35; i++) {
+  const colors = ['#FF0000', '#FF8C00', '#FFD700', '#00FF00', '#00BFFF', '#0000FF', '#8A2BE2', '#FF00FF', '#FF1493']; // Enriched saturated colors
+  // Increased to 20 bubbles for a cleaner, balanced atmosphere
+  for (let i = 0; i < 20; i++) {
     configs.push({
       color: colors[i % colors.length],
-      size: 60 + Math.random() * 60,
+      size: 70 + Math.random() * 40, // 70-110px
       top: Math.random() * height,
       left: Math.random() * width,
       phase: Math.random() * Math.PI * 2,
+      radiusX: 50 + Math.random() * 100, // Increased for wider coverage
+      radiusY: 50 + Math.random() * 100,
+      freqX: 0.7 + Math.random() * 0.6, // Decoupled frequencies
+      freqY: 0.7 + Math.random() * 0.6,
+      speed: 0.8 + Math.random() * 0.4,
     });
   }
   return configs;
@@ -72,41 +81,33 @@ const getCircleConfig = (width: number, height: number) => {
 
 // --- REFINED LIQUID UI COMPONENT ---
 
-const LiquidCircle = memo(({ circle, time, sensorX, sensorY, agitation, width, height }: any) => {
+const LiquidCircle = memo(({ circle }: any) => {
+  const localTime = useSharedValue(0);
+
+  useEffect(() => {
+    localTime.value = withRepeat(
+      withTiming(2 * Math.PI, {
+        duration: (4500 + Math.random() * 2500), // Graceful 4.5-7s duration
+        easing: Easing.inOut(Easing.sin)
+      }),
+      -1,
+      true // Reverse for 100% seamless "no-cut" loop
+    );
+  }, []);
+
   const animatedStyle = useAnimatedStyle(() => {
-    // 1. AMBIENT SWAY
-    const swayX = Math.sin(time.value + circle.phase) * 40;
-    const swayY = Math.cos(time.value + circle.phase) * 50;
+    // 1. LISSAJOUS NATURAL MOTION (Covers all sides better)
+    const swayX = Math.sin((localTime.value * circle.freqX) + circle.phase) * circle.radiusX;
+    const swayY = Math.cos((localTime.value * circle.freqY) + circle.phase) * circle.radiusY;
 
-    // 2. SLOSH (Follow the tilt)
-    const sloshX = sensorX.value * 120; // Increased back for "flowing" feel
-    const sloshY = sensorY.value * 120;
-
-    // 3. SCALE
-    const ambientScale = 1 + Math.sin(time.value + circle.phase) * 0.2;
-    const finalScale = ambientScale * agitation.value;
-
-    // 4. WRAP LOGIC (Crucial for "all bubbles staying visible")
-    // Instead of clamping at edge, we make them "loop" around the edges of the container
-    // This ensures density is always constant.
-    let finalX = swayX + sloshX;
-    let finalY = swayY + sloshY;
-
-    // 4. WRAP LOGIC (Crucial for "all bubbles staying visible")
-    // We use a custom modulo to wrap the absolute position around the viewport.
-    // This makes the liquid appear "infinite" and keep all bubbles on screen.
-    const startX = circle.left || (width - circle.right - circle.size);
-    const startY = circle.top || (height - circle.bottom - circle.size);
-
-    // Calculate final absolute position with wrap-around
-    let absX = (startX + swayX + sloshX + width) % width;
-    let absY = (startY + swayY + sloshY + height) % height;
+    // 2. SCALE
+    const scale = 1 + Math.sin(localTime.value + circle.phase) * 0.2;
 
     return {
-      left: absX,
-      top: absY,
       transform: [
-        { scale: finalScale }
+        { translateX: swayX },
+        { translateY: swayY },
+        { scale: scale }
       ]
     };
   });
@@ -119,8 +120,10 @@ const LiquidCircle = memo(({ circle, time, sensorX, sensorY, agitation, width, h
           width: circle.size,
           height: circle.size,
           borderRadius: circle.size / 2,
-          opacity: 0.6,
+          opacity: 1.0,
           position: 'absolute',
+          top: circle.top as any,
+          left: circle.left as any,
         },
         animatedStyle
       ]}
@@ -130,62 +133,26 @@ const LiquidCircle = memo(({ circle, time, sensorX, sensorY, agitation, width, h
 
 const LiquidBackground = memo(({ scrollY }: any) => {
   const { width, height } = useWindowDimensions();
-  const time = useSharedValue(0);
   const circleConfig = useMemo(() => getCircleConfig(width, height), [width, height]);
 
-  // GRAVITY SENSOR (Best for "water in a can" tilt physics)
-  const sensor = useAnimatedSensor(SensorType.GRAVITY, { interval: 16 });
-
-  // SMOOTH SENSOR DATA (Derive once for all children to save CPU)
-  const sensorX = useDerivedValue(() => withSpring(sensor.sensor.value.x, { damping: 20, stiffness: 100 }));
-  const sensorY = useDerivedValue(() => withSpring(sensor.sensor.value.y, { damping: 20, stiffness: 100 }));
-
-  const agitation = useDerivedValue(() => {
-    const totalMove = Math.abs(sensor.sensor.value.x) + Math.abs(sensor.sensor.value.y);
-    return withSpring(
-      interpolate(totalMove, [0, 15], [1, 1.4], Extrapolate.CLAMP),
-      { damping: 10, stiffness: 60 }
-    );
-  });
-
-  useEffect(() => {
-    time.value = withRepeat(
-      withTiming(2 * Math.PI, { duration: 5000, easing: Easing.linear }), // Restored original 5s speed
-      -1,
-      false
-    );
-  }, []);
-
-  // Smoothing the scroll parallax
-  const smoothScrollY = useDerivedValue(() => {
-    return withSpring(scrollY.value, { damping: 20, stiffness: 120 });
-  });
-
-  const parallax = useAnimatedStyle(() => ({
-    transform: [{ translateY: -(smoothScrollY.value * 0.1) }]
-  }));
-
   return (
-    <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, parallax]}>
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
       {circleConfig.map((circle, i) => (
         <LiquidCircle
           key={i}
           circle={circle}
-          time={time}
-          sensorX={sensorX}
-          sensorY={sensorY}
-          agitation={agitation}
-          width={width}
-          height={height}
         />
       ))}
-      <BlurView intensity={25} style={StyleSheet.absoluteFill} tint="light" />
-    </Animated.View>
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(255,255,255,0.15)' }]} />
+    </View>
   );
 });
 
-const TrendingNewsCard = memo(({ item, index, onPress }: any) => {
+const TrendingNewsCard = memo(({ item, index, onPress, scrollX, velocity }: any) => {
   const isViral = (item.likes?.length || 0) > 5 || (item.views || 0) > 20;
+  const CARD_WIDTH = width * 0.82;
+  const CARD_MARGIN = 20;
+  const SNAP = CARD_WIDTH + CARD_MARGIN;
 
   // High-Visual: Breathing Animation for cards
   const scale = useSharedValue(1);
@@ -212,10 +179,51 @@ const TrendingNewsCard = memo(({ item, index, onPress }: any) => {
     }
   }, [isViral]);
 
-  const animatedCardStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-    shadowOpacity: interpolate(scale.value, [1, 1.02], [0.2, 0.4])
-  }));
+  // Smooth Ball / Spherical Scroll Effect
+  const animatedCardStyle = useAnimatedStyle(() => {
+    const inputRange = [
+      (index - 2) * SNAP,
+      (index - 1) * SNAP,
+      index * SNAP,
+      (index + 1) * SNAP,
+      (index + 2) * SNAP,
+    ];
+    const sphereScale = scrollX ? interpolate(
+      scrollX.value,
+      inputRange,
+      [0.82, 0.9, 1, 0.9, 0.82],
+      Extrapolate.CLAMP
+    ) : 1;
+    const rotateY = scrollX ? interpolate(
+      scrollX.value,
+      inputRange,
+      [20, 10, 0, -10, -20],
+      Extrapolate.CLAMP
+    ) : 0;
+    const translateY = scrollX ? interpolate(
+      scrollX.value,
+      inputRange,
+      [12, 5, 0, 5, 12],
+      Extrapolate.CLAMP
+    ) : 0;
+    const itemOpacity = scrollX ? interpolate(
+      scrollX.value,
+      inputRange,
+      [0.5, 0.75, 1, 0.75, 0.5],
+      Extrapolate.CLAMP
+    ) : 1;
+
+    return {
+      transform: [
+        { perspective: 1000 },
+        { translateY },
+        { scale: sphereScale * scale.value },
+        { rotateY: `${rotateY}deg` },
+      ],
+      opacity: itemOpacity,
+      shadowOpacity: interpolate(scale.value, [1, 1.02], [0.2, 0.4])
+    };
+  });
 
   const glowStyle = useAnimatedStyle(() => ({
     opacity: isViral ? glowOpacity.value : 0,
@@ -243,7 +251,9 @@ const TrendingNewsCard = memo(({ item, index, onPress }: any) => {
           source={{ uri: item.thumbnailUrl || item.imageUrl }}
           style={styles.trendingNewsImage}
           contentFit="cover"
-          transition={500}
+          transition={200}
+          priority="high"
+          recyclingKey={item._id}
         />
 
         <LinearGradient
@@ -294,28 +304,79 @@ const TrendingNewsCard = memo(({ item, index, onPress }: any) => {
   );
 });
 
-const ParallaxItem = memo(({ item, index, scrollX, onPress }: any) => {
+// --- LAYOUT CONSTANTS FOR ZERO-JITTER ---
+const HOME_HEIGHTS = {
+  features: 195,
+  myMemories: 120,
+  trending: 330,
+  highlights: 260,
+  categories: 310,
+  spotlight: 320,
+  spacer: 10
+};
+
+const SECTION_GAP = 35;
+
+const ParallaxItem = memo(({ item, index, scrollX, onPress, velocity }: any) => {
+  const ITEM_WIDTH = 200;
+  const ITEM_MARGIN = 12;
+  const SNAP = ITEM_WIDTH + ITEM_MARGIN;
+
   const animatedStyle = useAnimatedStyle(() => {
     const inputRange = [
-      (index - 1) * 212, // 200 width + 12 margin
-      index * 212,
-      (index + 1) * 212,
+      (index - 2) * SNAP,
+      (index - 1) * SNAP,
+      index * SNAP,
+      (index + 1) * SNAP,
+      (index + 2) * SNAP,
     ];
     const translateX = interpolate(
       scrollX.value,
       inputRange,
-      [-30, 0, 30],
+      [-50, -25, 0, 25, 50],
       Extrapolate.CLAMP
     );
+    const translateY = interpolate(
+      scrollX.value,
+      inputRange,
+      [15, 6, 0, 6, 15],
+      Extrapolate.CLAMP
+    );
+    const sphereScale = interpolate(
+      scrollX.value,
+      inputRange,
+      [0.82, 0.9, 1, 0.9, 0.82],
+      Extrapolate.CLAMP
+    );
+    const rotateY = interpolate(
+      scrollX.value,
+      inputRange,
+      [25, 12, 0, -12, -25],
+      Extrapolate.CLAMP
+    );
+    const itemOpacity = interpolate(
+      scrollX.value,
+      inputRange,
+      [0.4, 0.7, 1, 0.7, 0.4],
+      Extrapolate.CLAMP
+    );
+
     return {
-      transform: [{ translateX }],
+      transform: [
+        { perspective: 800 },
+        { translateX },
+        { translateY },
+        { scale: sphereScale },
+        { rotateY: `${rotateY}deg` },
+      ],
+      opacity: itemOpacity,
     };
   });
 
   return (
     <TouchableOpacity
       style={styles.recentItem}
-      onPress={() => onPress(index, item.imageUrl)}
+      onPress={() => onPress(index)}
       activeOpacity={0.9}
     >
       <Animated.View style={[styles.parallaxContainer, animatedStyle]}>
@@ -326,6 +387,7 @@ const ParallaxItem = memo(({ item, index, scrollX, onPress }: any) => {
           }}
           style={styles.parallaxImage}
           contentFit="cover"
+          recyclingKey={item._id}
         />
       </Animated.View>
       <LinearGradient colors={["transparent", "rgba(0,0,0,0.8)"]} style={styles.itemOverlay}>
@@ -343,11 +405,220 @@ const ParallaxItem = memo(({ item, index, scrollX, onPress }: any) => {
   );
 });
 
+
+const HomeFeatures = memo(({ onPostStory, onAllPhotos }: any) => {
+  return (
+    <View style={[styles.featuresContainer, { height: HOME_HEIGHTS.features, marginTop: 0, paddingTop: SECTION_GAP }]}>
+      <TouchableOpacity style={styles.featureCard} onPress={onPostStory} activeOpacity={0.8}>
+        <View style={styles.featureIcon}>
+          <Image source={{ uri: POST_STORY_ICON }} style={styles.fluentIcon} contentFit="contain" />
+        </View>
+        <Text style={styles.featureTitle}>Post Story</Text>
+        <Text style={styles.featureSubtitle}>New moment</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity style={styles.featureCard} onPress={onAllPhotos} activeOpacity={0.8}>
+        <View style={styles.featureIcon}>
+          <Image source={{ uri: ALL_PHOTOS_ICON }} style={styles.fluentIcon} contentFit="contain" />
+        </View>
+        <Text style={styles.featureTitle}>All Photos</Text>
+        <Text style={styles.featureSubtitle}>Quick browse</Text>
+      </TouchableOpacity>
+    </View>
+  );
+});
+
+const HomeMyMemories = memo(({ onPress }: any) => {
+  return (
+    <View style={[styles.featuresContainer, { height: HOME_HEIGHTS.myMemories, marginTop: 0, paddingTop: SECTION_GAP }]}>
+      <TouchableOpacity
+        style={[styles.featureCard, { width: width - 40, flexDirection: 'row', padding: 15 }]}
+        onPress={onPress}
+        activeOpacity={0.8}
+      >
+        <View style={[styles.featureIcon, { marginBottom: 0, marginRight: 15 }]}>
+          <Image source={{ uri: "https://img.icons8.com/fluency/48/cloud-checked.png" }} style={{ width: 32, height: 32 }} />
+        </View>
+        <View style={{ flex: 1, justifyContent: 'center' }}>
+          <Text style={styles.featureTitle}>My Memories</Text>
+          <Text style={styles.featureSubtitle}>Track your shared moments and status</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={20} color="#888" />
+      </TouchableOpacity>
+    </View>
+  );
+});
+
+const HomeTrending = memo(({ trendingPhotos, onPhotoPress }: any) => {
+  const trendingCardWidth = width * 0.82;
+  const trendingMargin = 20;
+  const trendingSnapInterval = trendingCardWidth + trendingMargin;
+  const trendingScrollX = useSharedValue(0);
+
+  const trendingScrollHandler = useAnimatedScrollHandler({
+    onScroll: (event) => {
+      trendingScrollX.value = event.contentOffset.x;
+    }
+  });
+
+  return (
+    <View style={{ height: HOME_HEIGHTS.trending, paddingTop: SECTION_GAP }}>
+      <View style={[styles.trendingTickerHeader, { marginBottom: 15 }]}>
+        <LinearGradient colors={["#FF3B30", "#FF9500"]} style={styles.tickerBadge} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
+          <Text style={styles.tickerBadgeText}>NEWS</Text>
+        </LinearGradient>
+        <View style={styles.tickerContent}>
+          <Text style={styles.tickerText}>Trending Today • High Engagement Memories</Text>
+        </View>
+      </View>
+
+      <Animated.FlatList
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        data={trendingPhotos}
+        keyExtractor={(item: any) => `trending-${item._id}`}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 15 }}
+        snapToInterval={trendingSnapInterval}
+        decelerationRate={0.985}
+        snapToAlignment="start"
+        onScroll={trendingScrollHandler}
+        scrollEventThrottle={4}
+        initialNumToRender={2}
+        maxToRenderPerBatch={2}
+        windowSize={5}
+        removeClippedSubviews={false}
+        renderItem={({ item, index }: any) => (
+          <View style={{ width: trendingCardWidth, marginRight: trendingMargin }}>
+            <TrendingNewsCard
+              item={item}
+              index={index}
+              onPress={() => onPhotoPress(index)}
+              scrollX={trendingScrollX}
+            />
+          </View>
+        )}
+      />
+    </View>
+  );
+});
+
+const HomeHighlights = memo(({ recentPhotos, scrollX, onPhotoPress }: any) => {
+  const highlightWidth = 200;
+  const highlightMargin = 12;
+  const highlightSnapInterval = highlightWidth + highlightMargin;
+
+  const highlightScrollHandler = useAnimatedScrollHandler({
+    onScroll: (event) => {
+      scrollX.value = event.contentOffset.x;
+    }
+  });
+
+  return (
+    <View style={{ height: HOME_HEIGHTS.highlights, paddingTop: SECTION_GAP }}>
+      <View style={[styles.sectionHeader, { marginBottom: 15 }]}>
+        <View style={styles.sectionTitleRow}>
+          <Ionicons name="flash" size={22} color="#FF9500" style={styles.sectionIconComponent} />
+          <Text style={styles.sectionTitle}>Recent Highlights</Text>
+        </View>
+      </View>
+      <Animated.FlatList
+        horizontal
+        onScroll={highlightScrollHandler}
+        scrollEventThrottle={4}
+        showsHorizontalScrollIndicator={false}
+        data={recentPhotos}
+        keyExtractor={(item) => item._id}
+        contentContainerStyle={{ paddingHorizontal: 20 }}
+        snapToInterval={highlightSnapInterval}
+        decelerationRate={0.985}
+        snapToAlignment="start"
+        initialNumToRender={3}
+        maxToRenderPerBatch={3}
+        windowSize={7}
+        removeClippedSubviews={false}
+        renderItem={({ item, index }) => (
+          <View style={{ width: highlightWidth, marginRight: highlightMargin }}>
+            <ParallaxItem
+              item={item}
+              index={index}
+              scrollX={scrollX}
+              onPress={onPhotoPress}
+            />
+          </View>
+        )}
+      />
+    </View>
+  );
+});
+
+const HomeCategories = memo(({ categories, onCategoryPress }: any) => {
+  return (
+    <View style={{ height: HOME_HEIGHTS.categories, paddingTop: SECTION_GAP }}>
+      <View style={[styles.sectionHeader, { marginBottom: 15 }]}>
+        <View style={styles.sectionTitleRow}>
+          <Ionicons name="apps" size={22} color="#5856D6" style={styles.sectionIconComponent} />
+          <Text style={styles.sectionTitle}>Explore Categories</Text>
+        </View>
+      </View>
+      <View style={styles.categoriesGrid}>
+        {categories.map((cat: any) => (
+          <TouchableOpacity
+            key={cat.id}
+            style={[styles.categoryCard, { borderColor: cat.color + '30' }]}
+            onPress={() => onCategoryPress(cat.name)}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.categoryIcon, { backgroundColor: cat.color + '20' }]}>
+              <Text style={styles.categoryEmoji}>{cat.icon}</Text>
+            </View>
+            <Text style={styles.categoryName}>{cat.name}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </View>
+  );
+});
+
+const HomeSpotlight = memo(({ photo, onPhotoPress, spotlightIndex }: any) => {
+  return (
+    <View style={{ height: HOME_HEIGHTS.spotlight, paddingTop: SECTION_GAP }}>
+      <View style={[styles.sectionHeader, { marginBottom: 15 }]}>
+        <View style={styles.sectionTitleRow}>
+          <Ionicons name="diamond" size={22} color="#FF2D55" style={styles.sectionIconComponent} />
+          <Text style={styles.sectionTitle}>Spotlight Memory</Text>
+        </View>
+      </View>
+      <TouchableOpacity activeOpacity={0.9} onPress={() => onPhotoPress(spotlightIndex)}>
+        <View style={styles.spotlightContainer}>
+          <Image
+            source={{ uri: photo?.imageUrl || FALLBACK_IMAGE }}
+            style={[StyleSheet.absoluteFill, { borderRadius: 25 }]}
+            contentFit="cover"
+            priority="high"
+            recyclingKey={photo?._id}
+          />
+          <LinearGradient colors={["transparent", "rgba(0,0,0,0.85)"]} style={styles.spotlightOverlay}>
+            <View style={styles.spotlightBadge}>
+              <Text style={styles.badgeText}>🔥 SPOTLIGHT</Text>
+            </View>
+            <View style={styles.spotlightInfo}>
+              <Text style={styles.spotlightTitle}>{photo?.title || "Campus Life"}</Text>
+              <Text style={styles.spotlightSubtitle}>
+                {photo?.folder || "Memories"} • Captured by Hub
+              </Text>
+            </View>
+          </LinearGradient>
+        </View>
+      </TouchableOpacity>
+    </View>
+  );
+});
+
 export default function HomeScreen() {
   const router = useRouter();
   const [recentPhotos, setRecentPhotos] = useState<any[]>([]);
   const [trendingPhotos, setTrendingPhotos] = useState<any[]>([]);
-  const [stats, setStats] = useState({ total: 0, folders: 0 });
+  const [viewerPhotos, setViewerPhotos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -366,6 +637,65 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
   const pathname = usePathname();
+
+  // Performance & Visual Shared Values
+  const scrollX = useSharedValue(0);
+  const scrollY = useSharedValue(0);
+  const shimValue = useSharedValue(-1);
+  const pulseValue = useSharedValue(1);
+
+  const headerScaleStyle = useAnimatedStyle(() => {
+    // Scale header when pulling down (overscroll)
+    const scale = interpolate(
+      scrollY.value,
+      [-100, 0],
+      [1.15, 1],
+      Extrapolate.CLAMP
+    );
+    const translateY = interpolate(
+      scrollY.value,
+      [-100, 0],
+      [20, 0],
+      Extrapolate.CLAMP
+    );
+    return {
+      transform: [{ scale }, { translateY }],
+    };
+  });
+
+  const mainScrollHandler = useAnimatedScrollHandler({
+    onScroll: (event) => {
+      scrollY.value = event.contentOffset.y;
+    }
+  });
+
+  useEffect(() => {
+    // Lively slow shimmer - slightly faster for "life"
+    shimValue.value = withRepeat(
+      withTiming(1, { duration: 4500, easing: Easing.linear }),
+      -1,
+      false
+    );
+
+    // Subtle breathing pulse for logo
+    pulseValue.value = withRepeat(
+      withSequence(
+        withTiming(1.05, { duration: 2500, easing: Easing.inOut(Easing.sin) }),
+        withTiming(1, { duration: 2500, easing: Easing.inOut(Easing.sin) })
+      ),
+      -1
+    );
+  }, []);
+
+  const shimmerStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: interpolate(shimValue.value, [-1, 1], [-width * 1.5, width * 1.5]) }],
+    opacity: interpolate(shimValue.value, [-1, -0.2, 0, 0.2, 1], [0, 0, 0.4, 0, 0])
+  }));
+
+  const logoPulseStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: pulseValue.value }]
+  }));
+
 
   useEffect(() => {
     const loadUrl = async () => {
@@ -418,14 +748,122 @@ export default function HomeScreen() {
     }
   };
 
-  const scrollX = useSharedValue(0);
-  const scrollY = useSharedValue(0);
 
-  const mainScrollHandler = useAnimatedScrollHandler({
-    onScroll: (event) => {
-      scrollY.value = event.contentOffset.y;
+  const listData = useMemo(() => {
+    // Standardized structure to prevent layout popping
+    return [
+      { type: 'features' },
+      { type: 'myMemories' },
+      { type: 'trending' },
+      { type: 'highlights' },
+      { type: 'categories' },
+      { type: 'spotlight' }
+    ];
+  }, []);
+
+  const categories = useMemo(() => [
+    { id: '1', name: 'College Events', icon: '🎉', color: '#007AFF' },
+    { id: '2', name: 'Sports', icon: '🏆', color: '#00C7BE' },
+    { id: '3', name: 'Campus Life', icon: '🏛️', color: '#34C759' },
+    { id: '4', name: 'Placements', icon: '💼', color: '#004085' },
+  ], []);
+
+
+  const fetchUserData = async () => {
+    try {
+      const userData = await authService.getCurrentUser();
+      setUser(userData);
+    } catch (err) {
+      console.log("No user logged in");
     }
+  };
+
+  const scrollHandler = useAnimatedScrollHandler((event) => {
+    scrollX.value = event.contentOffset.x;
   });
+
+
+
+  const handlePostStory = useCallback(() => router.push("/(tabs)/upload"), [router]);
+  const handleAllPhotos = useCallback(() => router.navigate({ pathname: "/(tabs)/gallery", params: { folder: undefined } }), [router]);
+  const handleMyMemories = useCallback(() => router.push("/my-memories"), [router]);
+  const handleTrendingPress = useCallback((idx: number) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setViewerPhotos(trendingPhotos);
+    setViewerIndex(idx);
+    setViewerOpen(true);
+  }, [trendingPhotos]);
+
+  const handleHighlightPress = useCallback((idx: number) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setViewerPhotos(recentPhotos);
+    setViewerIndex(idx);
+    setViewerOpen(true);
+  }, [recentPhotos]);
+
+  const handleCategoryPress = useCallback((name: string) => {
+    router.push(`/(tabs)/gallery?folder=${encodeURIComponent(name)}&source=explore`);
+  }, [router]);
+
+  const onSpotlightPhotoPress = useCallback((idx: number) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const spotlightPool = recentPhotos.length > 0 ? recentPhotos : trendingPhotos;
+    const currentSpotlight = spotlightPool[spotlightIndex % spotlightPool.length];
+    if (spotlightPool.length > 0) {
+      setViewerPhotos(spotlightPool);
+      setViewerIndex(idx % spotlightPool.length);
+      setViewerOpen(true);
+      incrementView(currentSpotlight._id);
+      // Jump to a new random image next time for variety
+      const nextIdx = (spotlightIndex + 1 + Math.floor(Math.random() * 2)) % spotlightPool.length;
+      setSpotlightIndex(nextIdx);
+    }
+  }, [recentPhotos, trendingPhotos, spotlightIndex]);
+
+  const getItemLayout = useCallback((data: any, index: number) => {
+    let offset = 0;
+    for (let i = 0; i < index; i++) {
+      const type = data[i].type as keyof typeof HOME_HEIGHTS;
+      offset += HOME_HEIGHTS[type] || 0;
+    }
+    const currentType = data[index].type as keyof typeof HOME_HEIGHTS;
+    return {
+      length: HOME_HEIGHTS[currentType] || 0,
+      offset: offset,
+      index,
+    };
+  }, []);
+  const renderItem = useCallback(({ item }: any) => {
+    switch (item.type) {
+      case 'features':
+        return <HomeFeatures onPostStory={handlePostStory} onAllPhotos={handleAllPhotos} />;
+      case 'myMemories':
+        return <HomeMyMemories onPress={handleMyMemories} />;
+      case 'trending':
+        if (trendingPhotos.length === 0) return <View style={{ height: HOME_HEIGHTS.trending }} />;
+        return <HomeTrending trendingPhotos={trendingPhotos} onPhotoPress={handleTrendingPress} />;
+      case 'highlights':
+        if (recentPhotos.length === 0) return <View style={{ height: HOME_HEIGHTS.highlights }} />;
+        return <HomeHighlights recentPhotos={recentPhotos} scrollX={scrollX} onPhotoPress={handleHighlightPress} />;
+      case 'categories':
+        return <HomeCategories categories={categories} onCategoryPress={handleCategoryPress} />;
+      case 'spotlight':
+        const spotlightPool = recentPhotos.length > 0 ? recentPhotos : trendingPhotos;
+        if (spotlightPool.length === 0) return <View style={{ height: HOME_HEIGHTS.spotlight }} />;
+        return (
+          <HomeSpotlight
+            photo={spotlightPool[spotlightIndex % spotlightPool.length]}
+            onPhotoPress={onSpotlightPhotoPress}
+            spotlightIndex={spotlightIndex}
+          />
+        );
+      default:
+        return null;
+    }
+  }, [
+    trendingPhotos, recentPhotos, spotlightIndex, scrollX, categories,
+    handlePostStory, handleAllPhotos, handleMyMemories, handleTrendingPress, handleHighlightPress, handleCategoryPress, onSpotlightPhotoPress
+  ]);
 
   const incrementView = async (id: string) => {
     if (!id || sessionViewedIds.current.has(id)) return;
@@ -503,18 +941,6 @@ export default function HomeScreen() {
     }
   }, []);
 
-  const scrollHandler = useAnimatedScrollHandler((event) => {
-    scrollX.value = event.contentOffset.x;
-  });
-
-  const fetchUserData = async () => {
-    try {
-      const userData = await authService.getCurrentUser();
-      setUser(userData);
-    } catch (err) {
-      console.log("No user logged in");
-    }
-  };
 
   const fetchRecentPhotos = async (showLoading = true) => {
     try {
@@ -571,15 +997,12 @@ export default function HomeScreen() {
         return p.imageUrl && !isExcluded;
       });
 
-      // Only log if count changes to avoid spamming
-      if (validPhotos.length !== recentPhotos.length) {
-        console.log("[HOME] Live Update: ", validPhotos.length, " photos");
+
+      // Deep-equality check to prevent unnecessary re-renders during polling
+      const isDifferent = JSON.stringify(validPhotos) !== JSON.stringify(recentPhotos);
+      if (isDifferent) {
+        setRecentPhotos(validPhotos);
       }
-
-      setRecentPhotos(validPhotos);
-
-      const folders = new Set(validPhotos.map((p: any) => p.folder || "General")).size;
-      setStats({ total: validPhotos.length, folders });
     } catch (err: any) {
       console.error("[HOME] Detailed Error:", {
         name: err.name,
@@ -624,31 +1047,52 @@ export default function HomeScreen() {
         };
       });
 
-      setTrendingPhotos(standardized);
+      const isDifferent = JSON.stringify(standardized) !== JSON.stringify(trendingPhotos);
+      if (isDifferent) {
+        setTrendingPhotos(standardized);
+      }
     } catch (err) {
       console.error("[HOME] Trending fetch failed:", err);
     }
   };
 
-  // Live Updates: Auto-refresh every 5 seconds when focused
+  // Caching State
+  const lastFetchedRef = useRef(0);
+  const CACHE_DURATION = 2 * 60 * 1000; // 2 minutes
+
+  // Live Updates: Auto-refresh only if stale
   useFocusEffect(
     useCallback(() => {
       let isActive = true;
 
       const loadData = async () => {
         if (!isActive) return;
-        await fetchRecentPhotos(false); // Pass false to suppress full loading state
-        await fetchTrendingPhotos();
+
+        // Skip fetch if within cache duration and we have data
+        const isStale = Date.now() - lastFetchedRef.current > CACHE_DURATION;
+        const hasData = recentPhotos.length > 0;
+
+        if (!hasData || isStale) {
+          await fetchRecentPhotos(false);
+          await fetchTrendingPhotos();
+          if (isActive) lastFetchedRef.current = Date.now();
+        }
       };
 
-      loadData(); // Initial load
+      loadData();
 
-      const interval = setInterval(loadData, 30000); // Refresh every 30 seconds
+      // Keep the interval for "live" feel if staying on the screen
+      const interval = setInterval(() => {
+        if (isActive) {
+          fetchRecentPhotos(false);
+          fetchTrendingPhotos();
+          lastFetchedRef.current = Date.now();
+        }
+      }, 30000);
 
       return () => {
         isActive = false;
         clearInterval(interval);
-        // Cleanup state when leaving screen
         setViewerOpen(false);
         setIsEditing(false);
       };
@@ -661,48 +1105,89 @@ export default function HomeScreen() {
     fetchRecentPhotos(true).finally(() => setRefreshing(false));
   }, []);
 
-  const categories = [
-    { id: '1', name: 'College Events', icon: '🎉', color: '#007AFF' },
-    { id: '2', name: 'Sports', icon: '🏆', color: '#00C7BE' }, // Changed from #5856D6 (purple) to teal/blue
-    { id: '3', name: 'Campus Life', icon: '🏛️', color: '#34C759' }, // Green for contrast
-    { id: '4', name: 'Placements', icon: '💼', color: '#004085' },
-  ];
 
-  const totalViews = recentPhotos.reduce((sum, p) => sum + (Number(p.views) || 0), 0);
+  // Time-of-day greeting
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return '☀️ Good Morning';
+    if (hour < 17) return '🌤️ Good Afternoon';
+    return '🌙 Good Evening';
+  };
+
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
-      <LiquidBackground scrollY={scrollY} />
-      <LinearGradient
-        colors={["#007AFF", "#00C6FF"]}
-        style={[styles.header, { paddingTop: insets.top }]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 0 }}
-      >
-        <View style={styles.headerContent}>
-          <View style={styles.logoContainer}>
-            <Image source={{ uri: LOGO_PHOTO }} style={styles.headerLogo} contentFit="contain" />
-          </View>
-          <View style={{ flex: 1, marginLeft: 15 }}>
-            <Text style={styles.headerTitle}>College Gallery</Text>
-            <Text style={styles.headerSubtitle}>Capture & Share Memories</Text>
-          </View>
-          <TouchableOpacity
-            onPress={() => setIsSettingsVisible(true)}
-            style={{ padding: 10 }}
-          >
-            <Ionicons name="settings-outline" size={24} color="#fff" />
-          </TouchableOpacity>
-          <Text style={styles.sparkles}>✨</Text>
-        </View>
-      </LinearGradient>
+      <Animated.View style={headerScaleStyle}>
+        <LinearGradient
+          colors={["#00BFFF", "#1E90FF"]}
+          style={[styles.header, { paddingTop: insets.top + 16, paddingBottom: 45 }]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+        >
+          {/* Anti-flat Texture Overlay */}
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(255,255,255,0.03)', opacity: 0.5 }]} />
 
-      <Animated.ScrollView
+          {/* Luxury Shimmer Effect */}
+          <Animated.View style={[StyleSheet.absoluteFill, shimmerStyle]}>
+            <LinearGradient
+              colors={["transparent", "rgba(255,255,255,0.15)", "transparent"]}
+              start={{ x: 0, y: 0.5 }}
+              end={{ x: 1, y: 0.5 }}
+              style={StyleSheet.absoluteFill}
+            />
+          </Animated.View>
+
+          <View style={styles.headerContent}>
+            <Animated.View style={[styles.logoContainer, logoPulseStyle]}>
+              <Image source={{ uri: LOGO_PHOTO }} style={styles.headerLogo} contentFit="contain" />
+            </Animated.View>
+            <View style={{ flex: 1, marginLeft: 15 }}>
+              <Text style={styles.headerGreeting}>{getGreeting()}</Text>
+              <Text
+                style={styles.headerTitle}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
+                College Gallery
+              </Text>
+              <Text
+                style={styles.headerSubtitle}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
+                Capture & Share Memories
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => setIsSettingsVisible(true)}
+              style={{ padding: 10 }}
+            >
+              <Ionicons name="settings-outline" size={26} color="#fff" />
+            </TouchableOpacity>
+            <Text style={styles.sparkles}>✨</Text>
+          </View>
+
+          <View style={styles.headerRim} />
+        </LinearGradient>
+      </Animated.View>
+
+      <Animated.FlatList
+        data={listData}
+        renderItem={renderItem}
+        keyExtractor={(item) => item.type}
         onScroll={mainScrollHandler}
-        scrollEventThrottle={16}
+        scrollEventThrottle={4}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 100 }}
+        getItemLayout={getItemLayout}
+        initialNumToRender={7}
+        maxToRenderPerBatch={5}
+        windowSize={15}
+        updateCellsBatchingPeriod={30}
+        removeClippedSubviews={false}
+        overScrollMode="never"
+        bounces={true}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -710,257 +1195,23 @@ export default function HomeScreen() {
             tintColor="#007AFF"
           />
         }
-      >
-        {/* Stats Section - Elite Glassmorphism */}
-        <View style={styles.statsWrapper}>
-          <BlurView intensity={20} tint="light" style={StyleSheet.absoluteFill} />
-          <View style={styles.statsContainer}>
-            <View style={styles.statItem}>
-              <Text style={styles.statNumber}>{stats.total}</Text>
-              <Text style={styles.statLabel}>MEMORIES</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.statItem}>
-              <Text style={styles.statNumber}>{stats.folders}</Text>
-              <Text style={styles.statLabel}>FOLDERS</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.statItem}>
-              <Text style={styles.statNumber}>{totalViews}</Text>
-              <Text style={styles.statLabel}>TOTAL VIEWS</Text>
-            </View>
-          </View>
-        </View>
+      />
 
-        {/* Feature Cards */}
-        <View style={styles.featuresContainer}>
-          <TouchableOpacity
-            style={styles.featureCard}
-            onPress={() => router.push("/(tabs)/upload")}
-            activeOpacity={0.8}
-          >
-            <View style={styles.featureIcon}>
-              <Image source={{ uri: POST_STORY_ICON }} style={styles.fluentIcon} contentFit="contain" />
-            </View>
-            <Text style={styles.featureTitle}>Post Story</Text>
-            <Text style={styles.featureSubtitle}>New moment</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.featureCard}
-            onPress={() => router.navigate({ pathname: "/(tabs)/gallery", params: { folder: undefined } })}
-            activeOpacity={0.8}
-          >
-            <View style={styles.featureIcon}>
-              <Image source={{ uri: ALL_PHOTOS_ICON }} style={styles.fluentIcon} contentFit="contain" />
-            </View>
-            <Text style={styles.featureTitle}>All Photos</Text>
-            <Text style={styles.featureSubtitle}>Quick browse</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* New: My Memories Quick Access */}
-        <View style={[styles.featuresContainer, { marginTop: 15 }]}>
-          <TouchableOpacity
-            style={[styles.featureCard, { width: width - 40, flexDirection: 'row', padding: 15 }]}
-            onPress={() => router.push("/my-memories")}
-            activeOpacity={0.8}
-          >
-            <View style={[styles.featureIcon, { marginBottom: 0, marginRight: 15 }]}>
-              <Ionicons name="cloud-done" size={32} color="#007AFF" />
-            </View>
-            <View style={{ flex: 1, justifyContent: 'center' }}>
-              <Text style={styles.featureTitle}>My Memories</Text>
-              <Text style={styles.featureSubtitle}>Track your shared moments and status</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color="#888" />
-          </TouchableOpacity>
-        </View>
-
-        {/* Trending Today - News Style */}
-        {trendingPhotos.length > 0 && (
-          <View style={styles.trendingSection}>
-            <View style={styles.trendingTickerHeader}>
-              <LinearGradient
-                colors={["#FF3B30", "#FF9500"]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={styles.tickerBadge}
-              >
-                <Text style={styles.tickerBadgeText}>NEWS</Text>
-              </LinearGradient>
-              <View style={styles.tickerContent}>
-                <Text style={styles.tickerText}>Trending Today • High Engagement Memories</Text>
-              </View>
-            </View>
-
-            <FlatList
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              data={trendingPhotos}
-              keyExtractor={(item) => `trending-${item._id}`}
-              contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 10 }}
-              removeClippedSubviews={Platform.OS === 'android'}
-              initialNumToRender={3}
-              maxToRenderPerBatch={5}
-              windowSize={3}
-              renderItem={({ item, index }) => (
-                <TrendingNewsCard
-                  item={item}
-                  index={index}
-                  onPress={(idx: number) => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                    setRecentPhotos(trendingPhotos);
-                    setViewerIndex(idx);
-                    setViewerOpen(true);
-                  }}
-                />
-              )}
-            />
-          </View>
-        )}
-
-        {/* Recent Highlights */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionTitleRow}>
-              <Text style={styles.sectionIcon}>🌟</Text>
-              <Text style={styles.sectionTitle}>Recent Highlights</Text>
-            </View>
-          </View>
-
-          {error ? (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyText}>{error}</Text>
-            </View>
-          ) : recentPhotos.length > 0 ? (
-            <Animated.FlatList
-              horizontal
-              onScroll={scrollHandler}
-              scrollEventThrottle={16}
-              showsHorizontalScrollIndicator={false}
-              data={recentPhotos.slice(0, 10)}
-              keyExtractor={(item) => item._id}
-              contentContainerStyle={{ paddingHorizontal: 20 }}
-              removeClippedSubviews={Platform.OS === 'android'}
-              initialNumToRender={3}
-              maxToRenderPerBatch={5}
-              windowSize={3}
-              renderItem={({ item, index }) => (
-                <ParallaxItem
-                  item={item}
-                  index={index}
-                  scrollX={scrollX}
-                  onPress={(idx: number, url: string) => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    setViewerIndex(idx);
-                    setViewerOpen(true);
-                  }}
-                />
-              )}
-            />
-          ) : (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyText}>No recent highlights yet.</Text>
-            </View>
-          )}
-        </View>
-
-        {/* Explore Categories - 2x2 Grid */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionTitleRow}>
-              <Text style={styles.sectionIcon}>🔍</Text>
-              <Text style={styles.sectionTitle}>Explore Categories</Text>
-            </View>
-          </View>
-          <View style={styles.categoriesGrid}>
-            {categories.map((cat, index) => (
-              <Animated.View
-                key={cat.id}
-                entering={FadeInDown.delay(200 * index).springify()}
-              >
-                <TouchableOpacity
-                  style={styles.categoryCard}
-                  onPress={() => {
-                    // Use string path for more reliable tab navigation with params
-                    router.push(`/(tabs)/gallery?folder=${encodeURIComponent(cat.name)}&source=explore`);
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <View style={[styles.categoryIcon, { backgroundColor: cat.color + '20' }]}>
-                    <Text style={styles.categoryEmoji}>{cat.icon}</Text>
-                  </View>
-                  <Text style={styles.categoryName}>{cat.name}</Text>
-                </TouchableOpacity>
-              </Animated.View>
-            ))}
-          </View>
-        </View>
-
-        {/* Spotlight Memory */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Spotlight Memory</Text>
-          <TouchableOpacity
-            activeOpacity={0.9}
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              if (recentPhotos.length > 0) {
-                // Show the CURRENT image in viewer
-                setViewerIndex(spotlightIndex);
-                setViewerOpen(true);
-                incrementView(recentPhotos[spotlightIndex]._id);
-
-                // Seamlessly cycle the background image for next time
-                const nextIdx = (spotlightIndex + 1) % recentPhotos.length;
-                setSpotlightIndex(nextIdx);
-              }
-            }}
-          >
-            <View style={styles.spotlightContainer}>
-              <ImageBackground
-                source={{
-                  uri: recentPhotos[spotlightIndex]?.imageUrl || FALLBACK_IMAGE,
-                  headers: { "bypass-tunnel-reminder": "true" }
-                }}
-                style={styles.spotlightImage}
-                imageStyle={{ borderRadius: 25 }}
-              >
-                <LinearGradient
-                  colors={["transparent", "rgba(0,0,0,0.4)", "rgba(0,0,0,0.85)"]}
-                  style={styles.spotlightOverlay}
-                >
-                  <View style={styles.spotlightBadge}>
-                    <Text style={styles.badgeText}>🔥 SPOTLIGHT</Text>
-                  </View>
-                  <View style={styles.spotlightInfo}>
-                    <Text style={styles.spotlightTitle}>{recentPhotos[spotlightIndex]?.title || "Campus Life"}</Text>
-                    <Text style={styles.spotlightSubtitle}>
-                      {recentPhotos[spotlightIndex]?.folder || "Memories"} • Captured by Hub
-                    </Text>
-                  </View>
-                </LinearGradient>
-              </ImageBackground>
-            </View>
-          </TouchableOpacity>
-        </View>
-      </Animated.ScrollView>
-
-      {/* Premium Photo Viewer */}
       {/* Premium Photo Viewer */}
       <PhotoViewer
         visible={viewerOpen && isFocused}
-        photos={recentPhotos.slice(0, 10)}
+        photos={viewerPhotos}
         startIndex={viewerIndex}
         currentUser={user}
         onClose={() => setViewerOpen(false)}
         onSwipe={(index: number) => {
           setViewerIndex(index);
-          const p = recentPhotos[index];
+          const p = viewerPhotos[index];
           if (p) incrementView(p._id);
         }}
         onLikeToggle={(id, isLiked, count) => {
-          setRecentPhotos(prev => prev.map(p => {
+          // Update the localized pool in the viewer
+          setViewerPhotos(prev => prev.map(p => {
             if (p._id === id) {
               const newLikes = isLiked
                 ? [...(p.likes || []), user?._id]
@@ -969,6 +1220,19 @@ export default function HomeScreen() {
             }
             return p;
           }));
+
+          // Sync back to main pools to ensure Home reflects heart status
+          const syncPool = (prev: any[]) => prev.map(p => {
+            if (p._id === id) {
+              const newLikes = isLiked
+                ? [...(p.likes || []), user?._id]
+                : (p.likes || []).filter((uid: string) => uid !== user?._id);
+              return { ...p, likes: newLikes };
+            }
+            return p;
+          });
+          setRecentPhotos(syncPool);
+          setTrendingPhotos(syncPool);
         }}
       />
 
@@ -1033,61 +1297,86 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingHorizontal: 25,
-    paddingTop: 55,
-    paddingBottom: 10,
     borderBottomLeftRadius: 35,
     borderBottomRightRadius: 35,
     overflow: 'hidden',
+    // Layered Shadow for Premium Depth
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 12,
+    zIndex: 10,
+  },
+  headerRim: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.25)',
   },
   headerContent: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   logoContainer: {
-    width: 55,
-    height: 55,
+    width: 60,
+    height: 60,
     borderRadius: 15,
     backgroundColor: 'rgba(255,255,255,0.95)',
     padding: 2,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#fff',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+    // Refined Shadow for Depth
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
   },
   headerLogo: {
     width: '85%',
     height: '85%',
   },
+  headerGreeting: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.7)',
+    fontWeight: '600',
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
   headerTitle: {
-    fontSize: 28,
+    fontSize: 33,
     fontWeight: '900',
     color: '#fff',
     letterSpacing: -0.8,
   },
   headerSubtitle: {
-    fontSize: 14,
+    fontSize: 18,
     color: 'rgba(255,255,255,0.85)',
     fontWeight: '600',
     marginTop: 2,
   },
   sparkles: {
-    fontSize: 28,
+    fontSize: 33,
   },
   statsWrapper: {
     marginHorizontal: 20,
-    marginTop: 15, // Space below header instead of overlap
+    marginTop: 15,
     borderRadius: 24,
     overflow: 'hidden',
-    backgroundColor: 'rgba(255,255,255,0.9)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.5)',
-    shadowColor: '#007AFF',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
-    elevation: 10,
+    backgroundColor: 'rgba(255,255,255,0.98)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(0,122,255,0.08)',
+    // Sculpted Depth
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
+    shadowRadius: 15,
+    elevation: 4,
   },
   statsContainer: {
     flexDirection: 'row',
@@ -1120,7 +1409,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    marginTop: 25,
+    marginTop: 15,
   },
   featureCard: {
     backgroundColor: '#fff',
@@ -1128,10 +1417,17 @@ const styles = StyleSheet.create({
     padding: 20,
     borderRadius: 20,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.03)',
+    // Beveled Detail
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.8)',
+    overflow: 'hidden',
+    // Premium Depth
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
+    shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.08,
-    shadowRadius: 12,
+    shadowRadius: 15,
     elevation: 4,
   },
   featureIcon: {
@@ -1142,13 +1438,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
     backgroundColor: '#fff',
-    shadowColor: '#007AFF',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
-    elevation: 4,
-    borderWidth: 1,
-    borderColor: '#F0F7FF',
+    borderWidth: 1.5,
+    borderColor: '#E8F2FF',
   },
   fluentIcon: {
     width: 32,
@@ -1165,7 +1456,7 @@ const styles = StyleSheet.create({
     color: '#888',
   },
   section: {
-    marginTop: 35,
+    marginTop: 25,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -1181,6 +1472,9 @@ const styles = StyleSheet.create({
   sectionIcon: {
     fontSize: 20,
     marginRight: 8,
+  },
+  sectionIconComponent: {
+    marginRight: 10,
   },
   sectionTitle: {
     fontSize: 22,
@@ -1212,9 +1506,9 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   parallaxContainer: {
-    width: '120%',
+    width: '140%',
     height: '100%',
-    marginLeft: '-10%',
+    marginLeft: '-20%',
   },
   parallaxImage: {
     width: '100%',
@@ -1321,13 +1615,16 @@ const styles = StyleSheet.create({
     width: (width - 60) / 2,
     backgroundColor: '#fff',
     borderRadius: 16,
-    padding: 20,
+    padding: 16, // Slightly tighter padding for premium feel
     marginBottom: 15,
     flexDirection: 'row',
     alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: 'rgba(0,0,0,0.03)', // Fallback, will be overridden
+    overflow: 'hidden',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
     shadowRadius: 8,
     elevation: 2,
   },
@@ -1354,13 +1651,15 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     borderRadius: 25,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 15,
-    elevation: 10,
     marginTop: 15,
     marginHorizontal: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 10,
   },
   spotlightImage: {
     width: '100%',
@@ -1432,9 +1731,10 @@ const styles = StyleSheet.create({
     zIndex: 110,
     paddingHorizontal: 20,
     paddingVertical: 10,
-    borderRadius: 25,
-    backgroundColor: 'rgba(50,50,50,0.8)',
-    borderWidth: 2,
+    borderRadius: 24,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.4)',
   },
   indicatorText: {
@@ -1506,8 +1806,7 @@ const styles = StyleSheet.create({
   },
   // News Style Trending Styles
   trendingSection: {
-    marginTop: 35,
-    marginBottom: 20,
+    // Height and Margins now handled by item container for zero-clipping
   },
   trendingTickerHeader: {
     flexDirection: 'row',
@@ -1554,10 +1853,8 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   trendingNewsCardContainer: {
-    width: 300,
+    width: '100%',
     height: 200,
-    marginRight: 25,
-    marginLeft: 5, // Extra space for glow
     marginBottom: 15,
   },
   viralGlow: {
@@ -1589,6 +1886,7 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     padding: 20,
     justifyContent: 'space-between',
+    backgroundColor: 'rgba(0,0,0,0.1)', // Subtle tint for consistency
   },
   trendingBadgeRow: {
     flexDirection: 'row',

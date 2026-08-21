@@ -24,7 +24,7 @@ import { useState, useCallback, useEffect, useRef, memo } from "react";
 import { useFocusEffect, useLocalSearchParams, useRouter, usePathname } from "expo-router";
 import { useIsFocused } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
-import { BlurView } from "expo-blur";
+
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
 import ShimmerLoader from "../../components/ShimmerLoader";
@@ -228,17 +228,23 @@ export default function GalleryScreen() {
     }
   }, [folder, useLocalSearchParams().t]); // Re-run if folder or reset-timestamp changes
 
+  // Caching
+  const lastFetchedRef = useRef(0);
+  const CACHE_DURATION = 2 * 60 * 1000; // 2 minutes
+
   useFocusEffect(
     useCallback(() => {
+      let isActive = true;
+
       const loadMyUploads = async () => {
         try {
           const stored = await AsyncStorage.getItem("my_uploads");
           if (stored) {
             const ids = JSON.parse(stored);
-            setMyUploadsIds(ids);
+            if (isActive) setMyUploadsIds(ids);
 
             const seen = await AsyncStorage.getItem("seen_uploads_count");
-            if (seen) setSeenUploadsCount(parseInt(seen));
+            if (seen && isActive) setSeenUploadsCount(parseInt(seen));
           }
         } catch (e) {
           console.error("Error loading my uploads:", e);
@@ -246,15 +252,26 @@ export default function GalleryScreen() {
       };
 
       const loadInitialData = async () => {
-        // Just fetch data on focus, reset logic is now in useEffect
+        if (!isActive) return;
+
+        // Always load local uploads state (fast)
         await loadMyUploads();
-        await fetchPhotos(isInitialFocus.current);
+
+        // Check if main data is stale
+        const isStale = Date.now() - lastFetchedRef.current > CACHE_DURATION;
+        const hasData = photos.length > 0;
+
+        if (!hasData || isStale || isInitialFocus.current) {
+          await fetchPhotos(isInitialFocus.current);
+          if (isActive) lastFetchedRef.current = Date.now();
+        }
         isInitialFocus.current = false;
       };
+
       loadInitialData();
 
       return () => {
-        // No-op cleanup
+        isActive = false;
       };
     }, [])
   );
@@ -334,6 +351,7 @@ export default function GalleryScreen() {
           }}
           style={styles.folderPreview}
           transition={200}
+          recyclingKey={item.name}
         />
         <View style={styles.folderIconContainer}>
           <Ionicons name="folder" size={20} color="#fff" />
@@ -387,7 +405,7 @@ export default function GalleryScreen() {
 
         {/* Status Overlays */}
         {(item.status === 'pending' || item.status === 'rejected') && (
-          <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFill}>
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
             <View style={styles.statusOverlay}>
               <View style={[
                 styles.statusBadge,
@@ -403,7 +421,7 @@ export default function GalleryScreen() {
                 </Text>
               </View>
             </View>
-          </BlurView>
+          </View>
         )}
 
         <LinearGradient
@@ -712,17 +730,19 @@ export default function GalleryScreen() {
     );
   };
 
+  const handleFolderPress = useCallback((name: string) => {
+    Haptics.selectionAsync();
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setSelectedFolder(name);
+    setViewMode("photos");
+  }, []);
+
   const renderFolderItem = useCallback(({ item }: { item: any }) => (
     <MemoizedFolderItem
       item={item}
-      onPress={(name) => {
-        Haptics.selectionAsync();
-        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-        setSelectedFolder(name);
-        setViewMode("photos");
-      }}
+      onPress={handleFolderPress}
     />
-  ), []);
+  ), [handleFolderPress]);
 
   const filteredPhotos = photos.filter(p => {
     if (p.status !== 'approved') return false;
@@ -734,6 +754,14 @@ export default function GalleryScreen() {
     return matchesFolder && matchesSearch;
   });
 
+  const handlePhotoPress = useCallback((photo: Photo) => {
+    Haptics.selectionAsync();
+    const photoIdx = filteredPhotos.findIndex(p => p._id === photo._id);
+    setViewerIndex(photoIdx >= 0 ? photoIdx : 0);
+    setViewerOpen(true);
+    incrementView(photo._id);
+  }, [filteredPhotos]);
+
   const renderPhotoItem = useCallback(({ item, index }: { item: Photo, index: number }) => (
     <MemoizedPhotoItem
       item={item}
@@ -741,16 +769,10 @@ export default function GalleryScreen() {
       isSelected={selectedIds.has(item._id)}
       isSelectionMode={isSelectionMode}
       onSelect={toggleSelection}
-      onPress={(photo) => {
-        Haptics.selectionAsync();
-        const photoIdx = filteredPhotos.findIndex(p => p._id === photo._id);
-        setViewerIndex(photoIdx >= 0 ? photoIdx : 0);
-        setViewerOpen(true);
-        incrementView(photo._id);
-      }}
+      onPress={handlePhotoPress}
       onActions={handlePhotoActions}
     />
-  ), [filteredPhotos, user, handlePhotoActions, selectedIds, isSelectionMode, toggleSelection]);
+  ), [selectedIds, isSelectionMode, toggleSelection, handlePhotoPress, handlePhotoActions]);
 
   if (loading) {
     return (
@@ -760,7 +782,7 @@ export default function GalleryScreen() {
           onPress={scrollToTop}
           style={styles.header}
         >
-          <BlurView intensity={90} tint="light" style={StyleSheet.absoluteFill} />
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(255,255,255,0.85)' }]} />
           <LinearGradient
             colors={["#007AFF", "#00C6FF"]}
             style={StyleSheet.absoluteFill}
@@ -835,7 +857,7 @@ export default function GalleryScreen() {
           onPress={scrollToTop}
           style={styles.header}
         >
-          <BlurView intensity={95} tint="light" style={StyleSheet.absoluteFill} />
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(255,255,255,0.85)' }]} />
           <LinearGradient
             colors={["#007AFF", "#00C6FF"]}
             style={StyleSheet.absoluteFill}
@@ -899,7 +921,12 @@ export default function GalleryScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
         columnWrapperStyle={styles.columnWrapper}
-        itemLayoutAnimation={LinearTransition}
+        scrollEventThrottle={8}
+        initialNumToRender={12}
+        maxToRenderPerBatch={4}
+        windowSize={11}
+        updateCellsBatchingPeriod={50}
+        removeClippedSubviews={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#007AFF" />
         }
@@ -912,10 +939,11 @@ export default function GalleryScreen() {
       />
 
       {/* FAB - Upload Button */}
-      <Animated.View
-        entering={FadeInDown.delay(600).springify()}
-        style={styles.fabContainer}
-      >
+      {!isSelectionMode && (
+        <Animated.View
+          entering={FadeInDown.delay(600).springify()}
+          style={styles.fabContainer}
+        >
         <TouchableOpacity
           style={styles.fab}
           onPress={pickImage}
@@ -929,6 +957,7 @@ export default function GalleryScreen() {
           )}
         </TouchableOpacity>
       </Animated.View>
+      )}
 
       {/* Upload Modal */}
       <Modal visible={isUploadModalVisible} transparent animationType="slide" onRequestClose={() => setIsUploadModalVisible(false)}>
@@ -1039,7 +1068,7 @@ export default function GalleryScreen() {
       />
 
       {isSelectionMode && (
-        <View style={styles.bulkActionBar}>
+        <View style={[styles.bulkActionBar, { bottom: Math.max(90, 80 + insets.bottom) }]}>
           <TouchableOpacity style={styles.bulkActionBtn} onPress={handleBulkMove}>
             <Ionicons name="folder-open" size={24} color="#007AFF" />
             <Text style={styles.bulkActionText}>Move</Text>
@@ -1165,11 +1194,6 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     borderWidth: 1,
     borderColor: "#E6F2FF",
-    shadowColor: "#007AFF",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 5,
     overflow: "hidden",
   },
   folderImageContainer: {
@@ -1184,11 +1208,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#007AFF', // Solid Elite Blue for contrast
     padding: 8,
     borderRadius: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    elevation: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
   },
   folderIcon: {
     width: 22,
@@ -1205,11 +1226,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.9)',
     padding: 8,
     borderRadius: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    borderWidth: 1,
+    borderColor: '#eee',
   },
   folderInfo: {
     padding: 12,
@@ -1242,12 +1260,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     borderRadius: 16,
     marginBottom: 15,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-    overflow: "hidden", // Clip image to rounded corners
+    borderWidth: 1,
+    borderColor: '#f0f0f0',
+    overflow: "hidden",
   },
   image: {
     width: "100%",
@@ -1691,7 +1706,6 @@ const styles = StyleSheet.create({
   },
   bulkActionBar: {
     position: 'absolute',
-    bottom: 25,
     left: 20,
     right: 20,
     height: 70,

@@ -1,14 +1,15 @@
 import { Tabs } from "expo-router";
-import { Text, StyleSheet, Platform } from "react-native";
+import { Platform } from "react-native";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
-import { BlurView } from "expo-blur";
 
 export default function TabLayout() {
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
+        lazy: false, // Pre-mount all tabs for instant switching
+        animation: 'none',
         tabBarStyle: {
           position: "absolute",
           borderTopWidth: 1,
@@ -32,7 +33,7 @@ export default function TabLayout() {
       }}
       screenListeners={{
         tabPress: () => {
-          Haptics.selectionAsync();
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         },
       }}
     >
@@ -44,6 +45,7 @@ export default function TabLayout() {
             <Image
               source={{ uri: `https://img.icons8.com/fluency/48/home.png` }}
               style={{ width: 26, height: 26, opacity: color === "#8E8E93" ? 0.5 : 1 }}
+              cachePolicy="memory-disk"
             />
           )
         }}
@@ -56,13 +58,12 @@ export default function TabLayout() {
             <Image
               source={{ uri: `https://img.icons8.com/fluency/48/stack-of-photos.png` }}
               style={{ width: 26, height: 26, opacity: color === "#8E8E93" ? 0.5 : 1 }}
+              cachePolicy="memory-disk"
             />
           )
         }}
         listeners={({ navigation }) => ({
           tabPress: (e) => {
-            // Explicitly navigate to the gallery with NO folder param
-            // and a timestamp to force a reset event.
             navigation.navigate("gallery", {
               folder: undefined,
               source: "tab",
@@ -79,6 +80,7 @@ export default function TabLayout() {
             <Image
               source={{ uri: `https://img.icons8.com/fluency/48/cloud-lighting.png` }}
               style={{ width: 26, height: 26, opacity: color === "#8E8E93" ? 0.5 : 1 }}
+              cachePolicy="memory-disk"
             />
           )
         }}
@@ -91,22 +93,12 @@ export default function TabLayout() {
             <Image
               source={{ uri: `https://img.icons8.com/fluency/48/chat.png` }}
               style={{ width: 26, height: 26, opacity: color === "#8E8E93" ? 0.5 : 1 }}
+              cachePolicy="memory-disk"
             />
           )
         }}
       />
-      <Tabs.Screen
-        name="analytics"
-        options={{
-          title: "Stats",
-          tabBarIcon: ({ color }) => (
-            <Image
-              source={{ uri: `https://img.icons8.com/fluency/48/analytics.png` }}
-              style={{ width: 26, height: 26, opacity: color === "#8E8E93" ? 0.5 : 1 }}
-            />
-          )
-        }}
-      />
+
     </Tabs>
   );
 }

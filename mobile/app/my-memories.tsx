@@ -49,19 +49,19 @@ export default function MyMemoriesScreen() {
         try {
             setLoading(true);
 
-            // Load IDs first
+            // Load local IDs only as a fallback or for shadow tracking
             const stored = await AsyncStorage.getItem("my_uploads");
-            const ids = stored ? JSON.parse(stored) : [];
-            setMyUploadsIds(ids);
+            const localIds = stored ? JSON.parse(stored) : [];
 
-            const response = await api.get("/upload");
+            // Fetch from server (Now returns ONLY this user's photos)
+            const response = await api.get("/upload/my");
 
             const storedUrl = await authStorage.getServerUrl();
             let baseRaw = (storedUrl || api.defaults.baseURL || "http://10.73.154.112:5000/api");
             if (!baseRaw.startsWith("http")) baseRaw = "http://" + baseRaw;
             const baseApiUrl = baseRaw.replace("/api", "").replace(/\/$/, "");
 
-            const standardizedPhotos = response.data.map((p: any) => {
+            const myPhotos = response.data.map((p: any) => {
                 const fixUrl = (url: string) => {
                     if (!url) return null;
                     if (url.startsWith("/uploads")) return `${baseApiUrl}${url}`.trim();
@@ -78,11 +78,6 @@ export default function MyMemoriesScreen() {
                     thumbnailUrl: fixUrl(p.thumbnailUrl) || p.thumbnailUrl || fixUrl(p.imageUrl),
                 };
             });
-
-            // Filter ONLY my uploads
-            const myPhotos = standardizedPhotos.filter((p: any) =>
-                ids.includes(p._id)
-            );
 
             setPhotos(myPhotos);
 
@@ -196,6 +191,17 @@ export default function MyMemoriesScreen() {
                 onRename={async (id, newTitle) => {
                     await api.patch(`/upload/${id}`, { title: newTitle });
                     setPhotos(prev => prev.map(p => p._id === id ? { ...p, title: newTitle } : p));
+                }}
+                onDelete={async (id) => {
+                    await api.delete(`/upload/${id}`);
+                    setPhotos(prev => prev.filter(p => p._id !== id));
+                    // Update local storage too
+                    const stored = await AsyncStorage.getItem("my_uploads");
+                    if (stored) {
+                        const ids = JSON.parse(stored);
+                        const filtered = ids.filter((pId: string) => pId !== id);
+                        await AsyncStorage.setItem("my_uploads", JSON.stringify(filtered));
+                    }
                 }}
             />
         </View>

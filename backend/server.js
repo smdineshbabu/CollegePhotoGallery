@@ -6,7 +6,6 @@ import { fileURLToPath } from "url";
 import uploadRoutes from "./routes/uploadRoutes.js";
 import authRoutes from "./routes/authRoutes.js"; // Assuming you have auth routes
 import requestRoutes from "./routes/requestRoutes.js";
-import analyticsRoutes from "./routes/analyticsRoutes.js";
 import dotenv from "dotenv";
 import os from "os";
 
@@ -86,8 +85,6 @@ app.use("/api/auth", authRoutes);
 app.use("/auth", authRoutes);
 app.use("/api/requests", requestRoutes);
 app.use("/requests", requestRoutes);
-app.use("/api/analytics", analyticsRoutes);
-app.use("/analytics", analyticsRoutes);
 
 // Catch-all 404 logger
 app.use((req, res) => {

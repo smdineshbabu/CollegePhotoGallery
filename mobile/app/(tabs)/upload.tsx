@@ -19,9 +19,9 @@ import { useRouter } from "expo-router";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
 import * as authService from "../../services/authService";
-import Animated, { FadeInDown, FadeInUp, useAnimatedStyle, useSharedValue, withSpring, LinearTransition } from "react-native-reanimated";
+import Animated, { FadeInDown, FadeInUp, useAnimatedStyle, useSharedValue, withSpring, withSequence, LinearTransition } from "react-native-reanimated";
 import { LinearGradient } from "expo-linear-gradient";
-import { BlurView } from "expo-blur";
+
 
 const LOGO_PHOTO = "https://img.icons8.com/fluency/96/cloud-lighting.png";
 const PICKER_ICON = "https://img.icons8.com/fluency/144/camera.png";
@@ -141,17 +141,21 @@ export default function UploadScreen() {
       transform: [{ scale: scale.value }],
     }));
 
+    const handlePress = () => {
+      if (!disabled) {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        scale.value = withSequence(
+          withSpring(0.92, { damping: 4, stiffness: 300 }),
+          withSpring(1, { damping: 4, stiffness: 200 })
+        );
+        onPress?.();
+      }
+    };
+
     return (
       <TouchableOpacity
-        activeOpacity={0.9}
-        onPressIn={() => {
-          if (!disabled) {
-            scale.value = withSpring(0.95);
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          }
-        }}
-        onPressOut={() => (scale.value = withSpring(1))}
-        onPress={onPress}
+        activeOpacity={0.8}
+        onPress={handlePress}
         disabled={disabled}
       >
         <Animated.View style={[style, animatedStyle]}>{children}</Animated.View>
@@ -166,7 +170,7 @@ export default function UploadScreen() {
     >
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <Animated.View entering={FadeInDown.delay(100).springify()} style={styles.header}>
-          <BlurView intensity={90} tint="light" style={StyleSheet.absoluteFill} />
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(255,255,255,0.9)' }]} />
           <LinearGradient
             colors={["#007AFF", "#00C6FF"]}
             style={StyleSheet.absoluteFill}

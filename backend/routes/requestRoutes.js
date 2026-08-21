@@ -9,7 +9,7 @@ router.post("/", auth, async (req, res) => {
     try {
         const { photoId, message, type } = req.body;
         const newRequest = new Request({
-            user: "6994033366982d27225b7250", // Hardcoded for simplified guest access/temp dev
+            user: req.user.id,
             photo: photoId,
             message,
             type: type || 'general'
@@ -31,10 +31,10 @@ router.post("/bulk-delete", auth, async (req, res) => {
         }
 
         const requests = photoIds.map(id => ({
-            user: "6994033366982d27225b7250", // Hardcoded for guest access/dev
+            user: req.user.id,
             photo: id,
             message: message || "Bulk deletion request.",
-            type: 'delete'
+            type: 'deletion'
         }));
 
         const result = await Request.insertMany(requests);
@@ -64,7 +64,7 @@ router.get("/", auth, async (req, res) => {
 // List user's own requests
 router.get("/my", auth, async (req, res) => {
     try {
-        const requests = await Request.find({ user: "6994033366982d27225b7250" }) // Hardcoded for dev
+        const requests = await Request.find({ user: req.user.id })
             .populate("photo", "title imageUrl")
             .sort({ createdAt: -1 });
         res.json(requests);
